@@ -1,13 +1,13 @@
 ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');
-FILE_NAME('','2026-05-24T23:35:58',(''),(''),'IfcOpenShell 0.8.5-1c5b825','IfcOpenShell 0.8.5-1c5b825','');
+FILE_NAME('','2026-05-25T00:03:39',(''),(''),'IfcOpenShell 0.8.5-1c5b825','IfcOpenShell 0.8.5-1c5b825','');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
 DATA;
-#1=IFCPROJECT('1iauh6KHj2SPFU2v2bBkjj',$,'DM 17/06/2016 Z-1 Classification Library',$,$,$,$,$,$);
+#1=IFCPROJECT('3gbQkum0n0HOHvyYnczX3b',$,'DM 17/06/2016 Z-1 Classification Library',$,$,$,$,$,$);
 #2=IFCCLASSIFICATION('DM 17 giugno 2016 \X2\2013\X0\ Tavola Z-1 (tariffe professionali)','2016',$,'DM 17/06/2016 Z-1',$,'https://www.bosettiegatti.eu/info/norme/statali/2016_dm_17_06_tariffe_allegato.pdf',$);
-#3=IFCRELASSOCIATESCLASSIFICATION('227KzwxAD0ThmHikyxmkzn',$,$,$,(#1),#2);
+#3=IFCRELASSOCIATESCLASSIFICATION('01QnwRqrPBNwKEEvRlUM85',$,$,$,(#1),#2);
 #4=IFCCLASSIFICATIONREFERENCE($,'E.01','Edifici rurali agricoli semplici; edifici industriali/artigianali correnti',#2,$,$);
 #5=IFCCLASSIFICATIONREFERENCE($,'E.02','Edifici rurali agricoli complessi; edifici industriali/artigianali complessi',#2,$,$);
 #6=IFCCLASSIFICATIONREFERENCE($,'E.03','Ostelli, ristoranti, negozi, mercati semplici',#2,$,$);

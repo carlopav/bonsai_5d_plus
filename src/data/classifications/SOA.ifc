@@ -1,13 +1,13 @@
 ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');
-FILE_NAME('','2026-05-24T23:35:58',(''),(''),'IfcOpenShell 0.8.5-1c5b825','IfcOpenShell 0.8.5-1c5b825','');
+FILE_NAME('','2026-05-25T00:03:39',(''),(''),'IfcOpenShell 0.8.5-1c5b825','IfcOpenShell 0.8.5-1c5b825','');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
 DATA;
-#1=IFCPROJECT('2yspjDNY11wRw3pKBrvR2n',$,'SOA Classification Library',$,$,$,$,$,$);
+#1=IFCPROJECT('1xXVKCmST0FfEK8HmILe4w',$,'SOA Classification Library',$,$,$,$,$,$);
 #2=IFCCLASSIFICATION('D.Lgs. 36/2023 Allegato II.12','2023',$,'SOA',$,'https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2023-03-31;36',$);
-#3=IFCRELASSOCIATESCLASSIFICATION('1PH8AhOb98hQN91cVZ0r1R',$,$,$,(#1),#2);
+#3=IFCRELASSOCIATESCLASSIFICATION('1bFPigL9b64x85NA8naAf4',$,$,$,(#1),#2);
 #4=IFCCLASSIFICATIONREFERENCE($,'OG1','Edifici civili e industriali',#2,$,$);
 #5=IFCCLASSIFICATIONREFERENCE($,'OG2','Restauro e manutenzione dei beni immobili sottoposti a tutela',#2,$,$);
 #6=IFCCLASSIFICATIONREFERENCE($,'OG3','Strade, autostrade, ponti, viadotti, ferrovie, metropolitane',#2,$,$);

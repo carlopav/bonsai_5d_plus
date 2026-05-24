@@ -1631,6 +1631,7 @@ class RateListPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
+    bl_options = {"DEFAULT_CLOSED"}
     active_item_info = "no item selected"
 
     def get_active_item_info(self, context):

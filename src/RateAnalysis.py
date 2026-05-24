@@ -1,5 +1,6 @@
 ﻿import bpy
 import re
+import textwrap
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -39,6 +40,40 @@ _ROUNDING_CAT = "Rounding"
 _ALL_PA_CATEGORIES = _LINE_CATEGORIES | {_OVERHEAD_CAT, _PROFIT_CAT, _ROUNDING_CAT}
 
 _IFC_REF_PREFIX = "#ifc:"
+_DESCRIPTION_TEXT_NAME = "Bonsai5D+_Description"
+
+
+# ---------------------------------------------------------------------------
+# Text Editor helpers for long-text editing
+# ---------------------------------------------------------------------------
+
+def _open_text_editor(context, text):
+    for area in context.screen.areas:
+        if area.type == 'TEXT_EDITOR':
+            area.spaces.active.text = text
+            area.spaces.active.show_word_wrap = True
+            return
+    area_target = max(
+        (a for a in context.screen.areas if a.type not in ('PROPERTIES', 'TEXT_EDITOR')),
+        key=lambda a: a.width * a.height,
+        default=None,
+    )
+    if area_target:
+        area_target.type = 'TEXT_EDITOR'
+        area_target.spaces.active.text = text
+        area_target.spaces.active.show_word_wrap = True
+
+
+def _close_text_editor(context):
+    for area in context.screen.areas:
+        if area.type == 'TEXT_EDITOR':
+            area.type = 'VIEW_3D'
+            return
+
+
+def _remove_description_text():
+    if _DESCRIPTION_TEXT_NAME in bpy.data.texts:
+        bpy.data.texts.remove(bpy.data.texts[_DESCRIPTION_TEXT_NAME])
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +353,54 @@ class RA_OT_RefreshComponentRate(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# Operators — description text editor
+# ---------------------------------------------------------------------------
+
+class RA_OT_EditDescription(bpy.types.Operator):
+    bl_idname = "rate_analysis.edit_description"
+    bl_label = "Edit Description"
+    bl_description = "Open Text Editor to edit the item description"
+
+    def execute(self, context):
+        wm = context.window_manager
+        _remove_description_text()
+        text = bpy.data.texts.new(_DESCRIPTION_TEXT_NAME)
+        text.write(wm.rate_analysis_item_description)
+        text.cursor_set(0, character=0)
+        _open_text_editor(context, text)
+        wm.rate_analysis_editing_description = True
+        return {'FINISHED'}
+
+
+class RA_OT_ApplyDescription(bpy.types.Operator):
+    bl_idname = "rate_analysis.apply_description"
+    bl_label = "Apply"
+    bl_description = "Write the text back to the description and close the editor"
+
+    def execute(self, context):
+        wm = context.window_manager
+        if _DESCRIPTION_TEXT_NAME in bpy.data.texts:
+            wm.rate_analysis_item_description = bpy.data.texts[_DESCRIPTION_TEXT_NAME].as_string()
+            self.report({'INFO'}, "Description applied")
+        _remove_description_text()
+        _close_text_editor(context)
+        wm.rate_analysis_editing_description = False
+        return {'FINISHED'}
+
+
+class RA_OT_CancelDescription(bpy.types.Operator):
+    bl_idname = "rate_analysis.cancel_description"
+    bl_label = "Cancel"
+    bl_description = "Discard changes and close the editor"
+
+    def execute(self, context):
+        _remove_description_text()
+        _close_text_editor(context)
+        context.window_manager.rate_analysis_editing_description = False
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
 # Operators — cost item info
 # ---------------------------------------------------------------------------
 
@@ -578,6 +661,7 @@ class RateAnalysisPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -591,7 +675,29 @@ class RateAnalysisPanel(bpy.types.Panel):
         row.operator("rate_analysis.apply_item_info", text="", icon="CHECKMARK")
         box.prop(wm, "rate_analysis_item_identification", text="ID")
         box.prop(wm, "rate_analysis_item_name", text="Name")
-        box.prop(wm, "rate_analysis_item_description", text="Desc")
+
+        desc_box = box.box()
+        if not wm.rate_analysis_editing_description:
+            row = desc_box.row()
+            row.label(text="Description:", icon="TEXT")
+            row.operator("rate_analysis.edit_description", text="", icon="GREASEPENCIL")
+            if wm.rate_analysis_item_description:
+                col = desc_box.column(align=True)
+                col.scale_y = 0.7
+                for paragraph in wm.rate_analysis_item_description.split("\n"):
+                    for line in textwrap.wrap(paragraph, 60) or [" "]:
+                        col.label(text=line)
+            else:
+                desc_box.label(text="(empty)", icon="INFO")
+        else:
+            col = desc_box.column()
+            col.label(text="Editing description…", icon="GREASEPENCIL")
+            col.label(text=f"Edit '{_DESCRIPTION_TEXT_NAME}' in Text Editor,")
+            col.label(text="then:")
+            row = desc_box.row(align=True)
+            row.scale_y = 1.4
+            row.operator("rate_analysis.apply_description", icon="CHECKMARK")
+            row.operator("rate_analysis.cancel_description", icon="X")
 
         layout.separator(factor=0.5)
 
@@ -696,6 +802,9 @@ classes = [
     RA_OT_MoveDown,
     RA_OT_ClearAll,
     RA_OT_RefreshComponentRate,
+    RA_OT_EditDescription,
+    RA_OT_ApplyDescription,
+    RA_OT_CancelDescription,
     RA_OT_SyncItemInfo,
     RA_OT_ApplyItemInfo,
     RA_OT_ApplyToIfc,
@@ -741,6 +850,10 @@ def register():
         description="IFC step ID of the cost item being analysed (0 = none)",
         default=0,
     )
+    bpy.types.WindowManager.rate_analysis_editing_description = bpy.props.BoolProperty(
+        name="Editing Description",
+        default=False,
+    )
 
 
 def unregister():
@@ -755,5 +868,7 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_item_name
     del bpy.types.WindowManager.rate_analysis_item_description
     del bpy.types.WindowManager.rate_analysis_target_ifc_id
+    del bpy.types.WindowManager.rate_analysis_editing_description
+    _remove_description_text()
 
 
