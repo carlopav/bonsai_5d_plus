@@ -150,7 +150,11 @@ def _copy_items(tool_module, source_schedule, target_schedule,
         children = [c for rel in (src.IsNestedBy or []) for c in rel.RelatedObjects]
         is_leaf = not children
 
-        now_safety = inside_safety or (bool(exclude_id) and (src.Identification or "") == exclude_id)
+        if exclude_id.startswith("#"):
+            _matches = src.id() == int(exclude_id[1:])
+        else:
+            _matches = bool(exclude_id) and (src.Identification or "") == exclude_id
+        now_safety = inside_safety or _matches
 
         if not is_leaf:
             for cv in (src.CostValues or []):
@@ -198,8 +202,11 @@ def _safety_item_enum(self, context):
             children = [c for rel in (item.IsNestedBy or []) for c in rel.RelatedObjects]
             if children:
                 ident = item.Identification or ""
+                # Use IFC numeric id as enum identifier when Identification is empty:
+                # Blender treats "" as a separator (grayed-out, non-selectable).
+                enum_id = ident if ident else f"#{item.id()}"
                 label = f"[{ident}]  {item.Name or ''}" if ident else (item.Name or f"#{item.id()}")
-                items.append((ident, label, ""))
+                items.append((enum_id, label, ""))
             for ch in children:
                 _walk(ch)
 
