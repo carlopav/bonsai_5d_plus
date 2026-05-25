@@ -39,6 +39,7 @@ from . import BoQToScheduleOfRates
 from . import BulkUpdateCostSchedule
 from . import CostClassification
 from . import TenderComparison
+from . import SvgToPdf
 
 _MODULES = [
     RateListImporter,
@@ -47,6 +48,7 @@ _MODULES = [
     BulkUpdateCostSchedule,
     CostClassification,
     TenderComparison,
+    SvgToPdf,
 ]
 
 
