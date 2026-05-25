@@ -38,6 +38,7 @@ from . import RateAnalysis
 from . import BoQToScheduleOfRates
 from . import BulkUpdateCostSchedule
 from . import CostClassification
+from . import TenderComparison
 
 _MODULES = [
     RateListImporter,
@@ -45,6 +46,7 @@ _MODULES = [
     BoQToScheduleOfRates,
     BulkUpdateCostSchedule,
     CostClassification,
+    TenderComparison,
 ]
 
 
