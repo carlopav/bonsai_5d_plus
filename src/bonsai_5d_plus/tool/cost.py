@@ -267,7 +267,12 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
                 "Description": _ifc_str(rate["desc"]),
             })
 
-            if not rate["is_parent"]:
+            if rate["is_parent"]:
+                # SUM operator: Bonsai aggregates children automatically
+                cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+                tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
+                             attributes={"ArithmeticOperator": "ADD"})
+            else:
                 ep_xml_id = rate.get("ep_xml_id", "")
                 cost_rate = ep_ifc_map.get(ep_xml_id)
                 quantity = float(rate.get("quantity", 0.0))
