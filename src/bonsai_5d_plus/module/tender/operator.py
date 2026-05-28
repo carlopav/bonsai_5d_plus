@@ -5,7 +5,7 @@
 
 import bpy
 from . import data as _data
-from .data import _get_ifc, _get_schedules, _get_applied_value, _get_quantity, _iter_leaves, _copy_items, _build_comparison
+from .data import _get_ifc, _get_schedules, _get_applied_value, _get_quantity, _iter_leaves, _copy_items, _build_comparison, _invalidate_tender_enum_caches
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -52,6 +52,7 @@ class CreateTenderScheduleOperator(*_IfcOperatorBase):
             tool.Cost.load_cost_schedule_tree()
         except Exception:
             pass
+        _invalidate_tender_enum_caches()
         self.report({"INFO"}, f"Created '{company}'.")
 
 

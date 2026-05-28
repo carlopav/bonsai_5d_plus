@@ -261,9 +261,23 @@ def _collect_totals(cost_item, inherited_code, ifc_name, accumulator):
             _collect_totals(child, code, ifc_name, accumulator)
 
 
+_summary_cache: dict = {}  # {(schedule_id, ifc_name, gen): acc}
+_summary_gen: int = 0
+
+
+def _invalidate_summary_cache():
+    global _summary_gen
+    _summary_gen += 1
+
+
 def _build_summary(file, schedule_id, ifc_name):
+    key = (int(schedule_id), ifc_name, _summary_gen)
+    if key in _summary_cache:
+        return _summary_cache[key]
     schedule = file.by_id(int(schedule_id))
     acc = {}
     for root in ifcopenshell.util.cost.get_root_cost_items(schedule):
         _collect_totals(root, "", ifc_name, acc)
+    _summary_cache.clear()
+    _summary_cache[key] = acc
     return acc

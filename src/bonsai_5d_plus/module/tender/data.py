@@ -3,9 +3,22 @@
 #
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
+import time as _time
+
 SOURCE_TYPES = {"PRICEDBILLOFQUANTITIES", "UNPRICEDBILLOFQUANTITIES"}
 
-_safety_enum_cache = [("NONE", "(none)", "Do not exclude any subtree from the discount")]
+_ENUM_TTL = 1.0  # seconds before enum caches rebuild
+
+_safety_enum_cache = {}          # {sid: items_list}
+_boq_cache: tuple = (0.0, None)  # (timestamp, result)
+_tender_cache: tuple = (0.0, None)
+
+
+def _invalidate_tender_enum_caches():
+    global _safety_enum_cache, _boq_cache, _tender_cache
+    _safety_enum_cache = {}
+    _boq_cache = (0.0, None)
+    _tender_cache = (0.0, None)
 
 _cmp = {
     "source_name": "",
@@ -188,18 +201,18 @@ def _build_comparison(source_schedule, tender_schedules):
 # Dynamic enum callbacks ─────────────────────────────────────────────────────
 
 def _safety_item_enum(self, context):
-    global _safety_enum_cache
-    items = [("NONE", "(none)", "Do not exclude any subtree from the discount")]
+    _default = [("NONE", "(none)", "Do not exclude any subtree from the discount")]
     try:
         sid = getattr(context.scene, "tender_source_boq", "0")
         if sid == "0":
-            _safety_enum_cache = items
-            return _safety_enum_cache
+            return _default
+        if sid in _safety_enum_cache:
+            return _safety_enum_cache[sid]
         file = _get_ifc()
         if file is None:
-            _safety_enum_cache = items
-            return _safety_enum_cache
+            return _default
         import ifcopenshell.util.cost
+        items = [_default[0]]
         schedule = file.by_id(int(sid))
 
         def _walk(item):
@@ -214,27 +227,35 @@ def _safety_item_enum(self, context):
 
         for root in ifcopenshell.util.cost.get_root_cost_items(schedule):
             _walk(root)
+        _safety_enum_cache[sid] = items
+        return items
     except Exception:
-        pass
-    _safety_enum_cache = items
-    return _safety_enum_cache
+        return _default
 
 
 def _boq_items(self, context):
+    global _boq_cache
+    ts, result = _boq_cache
+    if result is not None and _time.monotonic() - ts < _ENUM_TTL:
+        return result
     try:
         schedules = _get_schedules(SOURCE_TYPES)
-        if not schedules:
-            return [("0", "No BoQ found", "")]
-        return [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules]
+        result = [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules] if schedules else [("0", "No BoQ found", "")]
     except Exception:
-        return [("0", "Error reading IFC", "")]
+        result = [("0", "Error reading IFC", "")]
+    _boq_cache = (_time.monotonic(), result)
+    return result
 
 
 def _tender_items(self, context):
+    global _tender_cache
+    ts, result = _tender_cache
+    if result is not None and _time.monotonic() - ts < _ENUM_TTL:
+        return result
     try:
         schedules = _get_schedules("TENDER")
-        if not schedules:
-            return [("0", "No Tender schedules found", "")]
-        return [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules]
+        result = [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules] if schedules else [("0", "No Tender schedules found", "")]
     except Exception:
-        return [("0", "Error reading IFC", "")]
+        result = [("0", "Error reading IFC", "")]
+    _tender_cache = (_time.monotonic(), result)
+    return result

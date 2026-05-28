@@ -4,6 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import re
+import time as _time
 import bpy
 
 try:
@@ -284,8 +285,16 @@ def _load_cost_item(context, item_id=None):
     return found
 
 
+_handler_last_check = 0.0
+
+
 @bpy.app.handlers.persistent
 def _auto_load_handler(scene, depsgraph):
+    global _handler_last_check
+    t = _time.monotonic()
+    if t - _handler_last_check < 0.1:
+        return
+    _handler_last_check = t
     try:
         wm = bpy.context.window_manager
         if not wm.rate_analysis_auto_load:

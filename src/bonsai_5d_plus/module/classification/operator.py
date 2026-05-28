@@ -4,7 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
-from .data import _SYSTEMS, _prop_name, _set_code
+from .data import _SYSTEMS, _prop_name, _set_code, _invalidate_summary_cache
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -37,6 +37,7 @@ class CC_OT_SetCode(*_IfcOperatorBase):
         ifc_name, _, cats, _ = _SYSTEMS[self.system]
         code = getattr(context.scene, _prop_name(self.system), "")
         _set_code(file, cost_item, ifc_name, code, {c: n for c, n in cats})
+        _invalidate_summary_cache()
 
 
 class CC_OT_ClearCode(*_IfcOperatorBase):
@@ -61,6 +62,7 @@ class CC_OT_ClearCode(*_IfcOperatorBase):
         cost_item = file.by_id(context.scene.BIMCostProperties.active_cost_item.ifc_definition_id)
         ifc_name, _, cats, _ = _SYSTEMS[self.system]
         _set_code(file, cost_item, ifc_name, "", {c: n for c, n in cats})
+        _invalidate_summary_cache()
 
 
 classes = [CC_OT_SetCode, CC_OT_ClearCode]

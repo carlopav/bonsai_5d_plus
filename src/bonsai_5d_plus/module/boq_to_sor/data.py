@@ -173,15 +173,25 @@ def _replace_cost_values(tool, source_item, target_item):
     _copy_cost_values(tool, source_item, target_item)
 
 
+_sor_cache: tuple = (0.0, None)  # (timestamp, result)
+_SOR_ENUM_TTL = 1.0
+
+
 def _sor_schedule_items(self, context):
+    import time
+    global _sor_cache
+    ts, result = _sor_cache
+    if result is not None and time.monotonic() - ts < _SOR_ENUM_TTL:
+        return result
     try:
         from bonsai import tool
         file = tool.Ifc.get()
         if file is None:
-            return [("0", "No IFC file loaded", "")]
-        schedules = [s for s in file.by_type("IfcCostSchedule") if s.PredefinedType == "SCHEDULEOFRATES"]
-        if not schedules:
-            return [("0", "No Schedule of Rates found", "")]
-        return [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules]
+            result = [("0", "No IFC file loaded", "")]
+        else:
+            schedules = [s for s in file.by_type("IfcCostSchedule") if s.PredefinedType == "SCHEDULEOFRATES"]
+            result = [(str(s.id()), s.Name or f"#{s.id()}", "") for s in schedules] if schedules else [("0", "No Schedule of Rates found", "")]
     except Exception:
-        return [("0", "Error reading IFC file", "")]
+        result = [("0", "Error reading IFC file", "")]
+    _sor_cache = (time.monotonic(), result)
+    return result
