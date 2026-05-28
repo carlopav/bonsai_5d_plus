@@ -1,4 +1,4 @@
-﻿# Bonsai - OpenBIM 5D Blender Add-on based on Bonsai
+# Bonsai - OpenBIM 5D Blender Add-on based on Bonsai
 # Copyright (C) 2026 Carlo Pavan <carlopav@gmail.com>
 #
 # This file is part of Bonsai5D+.
@@ -15,17 +15,13 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Bonsai5D+.  If not, see <http://www.gnu.org/licenses/>.
-#
-# This file was modified with the assistance of an AI coding tool.
 
-from typing import Union, List, TypedDict
+"""Pure-Python price list parser classes — zero bpy dependency.
 
-import bpy
-from bpy_extras.io_utils import ImportHelper
-from bpy.types import Operator
+Imported by module/rate_list and module/import_export.
+"""
 
-import textwrap
-import json
+from typing import List, TypedDict
 
 
 class XmlRateItem(TypedDict):
@@ -63,17 +59,13 @@ class PriceListParser:
         return data
 
     def parse_header(self, root):
-        # module to be implemented by each importer classes
         pass
 
     def parse_items(self, xml_content):
-        # module to be implemented by each importer classes
         pass
 
     def clean_xml_content(self, data):
         import re
-
-        # clean non printable characters
         return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", data)
 
     def get_stripped_xml_namespaces_root(self, data):
@@ -551,8 +543,8 @@ class ParserXmlLombardia(PriceListParser):
             return
 
         index = 0
-        level1_idx = {}   # codifica_I → list index
-        level2_idx = {}   # (codifica_I, codifica_II) → list index
+        level1_idx = {}
+        level2_idx = {}
 
         for voce in voci:
             children = list(voce)
@@ -684,8 +676,6 @@ class ParserXmlLombardia(PriceListParser):
                 index += 1
 
 
-
-
 class ParserXpwe(PriceListParser):
     """Parser per formato XPWE (Primus e compatibili)."""
 
@@ -738,9 +728,9 @@ class ParserXpwe(PriceListParser):
         ep_elements = ep_root.findall("EPItem")
 
         index = 0
-        spcap_to_index = {}   # SuperCapitolo ID → list index
-        cap_to_index = {}     # (id_spcap, id_cap) → list index
-        sbcap_to_index = {}   # (id_spcap, id_cap, id_sbcap) → list index
+        spcap_to_index = {}
+        cap_to_index = {}
+        sbcap_to_index = {}
 
         for ep in ep_elements:
             if not ep.get("ID"):
@@ -764,7 +754,6 @@ class ParserXpwe(PriceListParser):
             id_cap = self._text(ep, "IDCap")
             id_sbcap = self._text(ep, "IDSbCap")
 
-            # create SuperCapitolo on first encounter
             if id_spcap and id_spcap not in spcap_to_index:
                 sc = supercaps.get(id_spcap, {})
                 self.xml_rate_list.append({
@@ -776,7 +765,6 @@ class ParserXpwe(PriceListParser):
                 spcap_to_index[id_spcap] = index
                 index += 1
 
-            # create Capitolo on first encounter
             cap_key = (id_spcap, id_cap)
             if id_cap and cap_key not in cap_to_index:
                 cap = caps.get(id_cap, {})
@@ -791,7 +779,6 @@ class ParserXpwe(PriceListParser):
                 cap_to_index[cap_key] = index
                 index += 1
 
-            # create SubCapitolo on first encounter (when IDSbCap is present)
             sbcap_key = (id_spcap, id_cap, id_sbcap)
             if id_sbcap and sbcap_key not in sbcap_to_index:
                 sbcap = subcaps.get(id_sbcap, {})
@@ -810,7 +797,6 @@ class ParserXpwe(PriceListParser):
                 sbcap_to_index[sbcap_key] = index
                 index += 1
 
-            # build parents list for EPItem
             parents_parts = []
             if id_spcap in spcap_to_index:
                 parents_parts.append(str(spcap_to_index[id_spcap]))
@@ -835,7 +821,6 @@ class ParserXpwe(PriceListParser):
                 "safety": incidenza("IncSIC"),
             }
             self.xml_rate_list.append(ep_entry)
-            # also index by XML ID for parse_computo lookup
             xml_id = ep.get("ID")
             if xml_id:
                 self._ep_by_xml_id[xml_id] = ep_entry
@@ -958,9 +943,9 @@ class ParserXpwe(PriceListParser):
             return
 
         index = 0
-        spcat_to_index = {}   # IDSpCat → list index
-        cat_to_index = {}     # (IDSpCat, IDCat) → list index
-        sbcat_to_index = {}   # (IDSpCat, IDCat, IDSbCat) → list index
+        spcat_to_index = {}
+        cat_to_index = {}
+        sbcat_to_index = {}
 
         def _parent_entry(codice, desc):
             return {"desc": "", "unit": "", "value": 0.0,
@@ -979,7 +964,6 @@ class ParserXpwe(PriceListParser):
 
             ep = self._ep_by_xml_id.get(id_ep, {})
 
-            # SuperCategoria
             if id_spcat and id_spcat not in spcat_to_index:
                 sc = supercats.get(id_spcat, {})
                 e = _parent_entry(sc.get("codice", ""), sc.get("desc", ""))
@@ -988,7 +972,6 @@ class ParserXpwe(PriceListParser):
                 spcat_to_index[id_spcat] = index
                 index += 1
 
-            # Categoria
             cat_key = (id_spcat, id_cat)
             if id_cat and cat_key not in cat_to_index:
                 cat = cats.get(id_cat, {})
@@ -1000,7 +983,6 @@ class ParserXpwe(PriceListParser):
                 cat_to_index[cat_key] = index
                 index += 1
 
-            # SubCategoria
             sbcat_key = (id_spcat, id_cat, id_sbcat)
             if id_sbcat and sbcat_key not in sbcat_to_index:
                 sbcat = subcats.get(id_sbcat, {})
@@ -1016,7 +998,6 @@ class ParserXpwe(PriceListParser):
                 sbcat_to_index[sbcat_key] = index
                 index += 1
 
-            # VCItem leaf
             pp = []
             if id_spcat in spcat_to_index:
                 pp.append(str(spcat_to_index[id_spcat]))
@@ -1030,7 +1011,7 @@ class ParserXpwe(PriceListParser):
                 "level": len(pp),
                 "is_parent": False,
                 "parents": ",".join(pp),
-                "ep_xml_id": id_ep,       # IDEP → lookup key into _ep_by_xml_id
+                "ep_xml_id": id_ep,
                 "id": ep.get("id", ""),
                 "name": ep.get("name", ""),
                 "desc": ep.get("desc", ""),
@@ -1067,8 +1048,6 @@ class ParserXmlSix(PriceListParser):
         self.default_list_id = self._get_default_quotazione_id(prezzario)
         units = self.get_units(prezzario)
         products = prezzario.findall("prodotto")
-
-        # sort by prdId ensures parents are always processed before their children
         products = sorted(products, key=lambda p: p.attrib.get("prdId", ""))
 
         index = 0
@@ -1082,7 +1061,6 @@ class ParserXmlSix(PriceListParser):
             if is_parent:
                 prdId_to_index[prdId] = str(index)
 
-            # build parents as comma-separated ancestor indices from root to immediate parent
             parts = prdId.split(".")
             ancestors = [".".join(parts[:i]) for i in range(1, len(parts))]
             parents = ",".join(prdId_to_index[p] for p in ancestors if p in prdId_to_index)
@@ -1242,124 +1220,6 @@ class ParserIfcCostSchedule(PriceListParser):
             traverse(root_item, 0, [])
 
 
-# ---------------------------------------------------------------------------
-# Recent files support
-# ---------------------------------------------------------------------------
-
-_recent_cache = []  # module-level: prevents GC of enum item strings
-_importing = False  # guard against recursive import triggered by setting xml_rate_recent_path
-
-
-def _recent_file_path():
-    import os
-    return os.path.join(bpy.utils.user_resource('CONFIG'), 'RateListImporter_recent.json')
-
-
-def _load_recent():
-    try:
-        with open(_recent_file_path(), 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def _save_recent(path, title, year):
-    entries = _load_recent()
-    entries = [e for e in entries if e['path'] != path]
-    entries.insert(0, {'path': path, 'title': title, 'year': year})
-    entries = entries[:10]
-    try:
-        with open(_recent_file_path(), 'w', encoding='utf-8') as f:
-            json.dump(entries, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def _refresh_recent_cache():
-    global _recent_cache
-    entries = _load_recent()
-    if entries:
-        _recent_cache = [
-            (
-                e['path'],
-                f"{e['title']} ({e['year']})" if e.get('year') else e['title'],
-                e['path'],
-            )
-            for e in entries
-        ]
-    else:
-        _recent_cache = [('__NONE__', '— nessun prezzario recente —', '')]
-
-
-def _get_recent_items(self, context):
-    return _recent_cache or [('__NONE__', '— nessun prezzario recente —', '')]
-
-
-def _on_recent_select(self, context):
-    global _importing
-    if _importing:
-        return
-    path = self.xml_rate_recent_path
-    if path and path != '__NONE__':
-        _do_import(path, context)
-
-
-# ---------------------------------------------------------------------------
-# IFC project schedule source
-# ---------------------------------------------------------------------------
-
-_ifc_schedules_cache = []
-
-
-def _refresh_ifc_schedules_cache():
-    global _ifc_schedules_cache
-    try:
-        from bonsai import tool
-        file = tool.Ifc.get()
-        if file is None:
-            _ifc_schedules_cache = [('__NONE__', '— nessun schedule IFC —', '')]
-            return
-        schedules = file.by_type("IfcCostSchedule")
-        _ifc_schedules_cache = [
-            (str(s.id()), s.Name or f"Schedule {s.id()}", "")
-            for s in schedules
-        ] or [('__NONE__', '— nessun schedule IFC —', '')]
-    except Exception:
-        _ifc_schedules_cache = [('__NONE__', '— nessun schedule IFC —', '')]
-
-
-def _get_ifc_schedules(self, context):
-    return _ifc_schedules_cache or [('__NONE__', '— nessun schedule IFC —', '')]
-
-
-def _on_ifc_schedule_select(self, context):
-    schedule_id = self.ifc_rate_source_schedule
-    if schedule_id and schedule_id != '__NONE__':
-        _do_import_ifc(schedule_id, context)
-    else:
-        context.scene.xml_rate_list.clear()
-
-
-def _on_source_mode_change(self, context):
-    if self.rate_source_mode == 'FILE':
-        path = context.scene.xml_rate_recent_path
-        if path and path != '__NONE__':
-            _do_import(path, context)
-        else:
-            context.scene.xml_rate_list.clear()
-    else:
-        _refresh_ifc_schedules_cache()
-        schedule_id = context.scene.ifc_rate_source_schedule
-        if schedule_id and schedule_id != '__NONE__':
-            _do_import_ifc(schedule_id, context)
-        else:
-            context.scene.xml_rate_list.clear()
-
-
-# ---------------------------------------------------------------------------
-# Core parser detection and import logic
-# ---------------------------------------------------------------------------
-
 def _find_xml_parser(xml_content):
     """From Leeno (thanks Giuserpe): pre-scans the XML to pick the right parser."""
     parsers = {
@@ -1380,632 +1240,3 @@ def _find_xml_parser(xml_content):
         if pattern in xml_content:
             return parser_class
     return None
-
-
-def _populate_list_from_parser(parser, context):
-    context.scene.xml_rate_title = parser.title
-    context.scene.xml_rate_year = parser.year
-    context.scene.xml_rate_list.clear()
-    for rate in parser.xml_rate_list:
-        item = context.scene.xml_rate_list.add()
-        if rate["is_parent"] and rate["name"].startswith("Group "):
-            item.name = rate["id"]
-        else:
-            item.name = (rate["id"] + " - " + rate["name"]).strip(" -") or f"Item {rate['index']}"
-        item.level = rate["level"]
-        item.is_parent = rate["is_parent"]
-        item.parents = rate["parents"]
-        item.attributes = json.dumps(rate)
-        if item.is_parent:
-            item.is_expanded = False
-    if len(context.scene.xml_rate_list) > 0:
-        context.scene.xml_rate_list_active_index = 0
-
-
-def _do_import(filepath, context, report=None):
-    import os, re
-    xml_content = PriceListParser.get_xml_content(filepath)
-    parser_class = _find_xml_parser(xml_content)
-    if parser_class is None:
-        if report:
-            report({'ERROR'}, "Cannot automatically find a parser for selected file")
-        return False
-
-    parser = parser_class()
-    parser.parse_items(xml_content)
-
-    filename = os.path.basename(filepath)
-    name = os.path.splitext(filename)[0]
-    match = re.search(r'\b(\d{4})\b', name)
-    parser.year = match.group(1) if match else ""
-    parser.title = name
-
-    _populate_list_from_parser(parser, context)
-
-    _save_recent(filepath, parser.title, parser.year)
-    _refresh_recent_cache()
-    global _importing
-    _importing = True
-    try:
-        context.scene.xml_rate_recent_path = filepath
-    finally:
-        _importing = False
-    return True
-
-
-def _do_import_ifc(schedule_id, context, report=None):
-    try:
-        from bonsai import tool
-        file = tool.Ifc.get()
-        if file is None:
-            if report:
-                report({'ERROR'}, "No IFC file loaded")
-            return False
-    except Exception as e:
-        if report:
-            report({'ERROR'}, str(e))
-        return False
-
-    parser = ParserIfcCostSchedule()
-    parser.parse_schedule(file, schedule_id)
-    _populate_list_from_parser(parser, context)
-    return True
-
-
-class ImportRateList(Operator, ImportHelper):
-    """Import an Italian regional price list (prezzario) in XML or XPWE format."""
-
-    bl_idname = "import.rate_list"
-    bl_label = "Import Rate List"
-    filename_ext = ".xml"
-    filter_glob: bpy.props.StringProperty(
-        default="*.xml;*.xpwe",
-        options={"HIDDEN"},
-        maxlen=255,
-    )
-    chosen_parser: bpy.props.EnumProperty(
-        name="Parser",
-        description="Choose the available parser",
-        items=[
-            (
-                "Auto",
-                "Auto",
-                "Try to guess which importer is more suitable for the given data",
-            ),
-            ("RegioneVeneto", "Regione Veneto", "Tooltip"),
-            ("RegioneFriuliVeneziaGiulia", "Regione Friuli Venezia Giulia", "Tooltip"),
-        ],
-        default="RegioneVeneto",
-    )
-
-    def draw(self, context):
-        layout = self.layout
-        # layout.prop(self, "chosen_parser")
-        box = layout.box()
-        box.label(text="Options:")
-        box.label(text="")
-
-    def execute(self, context):
-        success = _do_import(self.filepath, context, self.report)
-        return {"FINISHED"} if success else {"CANCELLED"}
-
-
-def get_parent_desc(selected_rate):
-    rate_attrib = json.loads(selected_rate.attributes)
-    parent_indices = [p for p in rate_attrib.get("parents", "").split(",") if p.strip()]
-    if not parent_indices:
-        return ""
-    parent_idx = int(parent_indices[-1])
-    items = bpy.context.scene.xml_rate_list
-    if parent_idx < len(items):
-        return json.loads(items[parent_idx].attributes).get("desc", "")
-    return ""
-
-
-def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=False):
-    from bonsai import tool
-    import ifcopenshell.util.cost
-    import bonsai.bim.module.cost.data
-
-    active_ui_cost_item = bpy.context.scene.BIMCostProperties.active_cost_item
-    active_ifc_cost_item = file.by_id(active_ui_cost_item.ifc_definition_id)
-
-    if create_new_item:
-        if active_ifc_cost_item in ifcopenshell.util.cost.get_root_cost_items(
-            file.by_id(bpy.context.scene.BIMCostProperties.active_cost_schedule_id)
-        ):
-            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item)
-        elif active_ui_cost_item.has_children:
-            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item)
-        else:
-            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item.Nests[0].RelatingObject)
-    else:
-        cost_item = active_ifc_cost_item
-        if cost_item.CostValues:
-            for cost_value in list(cost_item.CostValues):
-                tool.Ifc.run("cost.remove_cost_value", parent=cost_item, cost_value=cost_value)
-
-    rate_attrib = json.loads(selected_rate.attributes)
-    if combine_desc:
-        parent_desc = get_parent_desc(selected_rate)
-        desc = (parent_desc + "\n" + rate_attrib["desc"]).strip() if parent_desc else rate_attrib["desc"]
-    else:
-        desc = rate_attrib["desc"]
-
-    tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={
-        "Identification": rate_attrib["id"],
-        "Name": rate_attrib["name"],
-        "Description": desc,
-    })
-
-    labor = float(rate_attrib["labor"])
-    equipment = float(rate_attrib["equipment"])
-    materials = float(rate_attrib["materials"])
-    safety = float(rate_attrib["safety"])
-    total_value = float(rate_attrib["value"])
-
-    components = [
-        ("Labor", labor),
-        ("Equipment", equipment),
-        ("Materials", materials),
-        ("Safety", safety),
-    ]
-    has_components = any(v != 0.0 for _, v in components)
-
-    if not has_components:
-        cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value, attributes={"AppliedValue": round(total_value, 2)})
-    else:
-        remaining = round(total_value - sum(v for _, v in components), 2)
-        if remaining != 0.0:
-            cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-            tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value, attributes={"AppliedValue": remaining})
-        for category, amount in components:
-            if amount != 0.0:
-                cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value, attributes={
-                    "Category": category,
-                    "AppliedValue": round(amount, 2),
-                })
-
-    bonsai.bim.module.cost.data.refresh()
-    tool.Cost.load_cost_schedule_tree()
-
-
-try:
-    from bonsai import tool as _bonsai_tool
-    _IfcOperatorBase = (_bonsai_tool.Ifc.Operator, bpy.types.Operator)
-    del _bonsai_tool
-except Exception:
-    _IfcOperatorBase = (bpy.types.Operator,)
-
-
-class UpdateActiveCostItem(*_IfcOperatorBase):
-    """Update active cost item with selected rate data."""
-
-    bl_idname = "import.xml_rate_update_cost_item"
-    bl_label = "Update active cost item"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            props = bpy.context.scene.BIMCostProperties
-            return (
-                len(getattr(bpy.context.scene, "xml_rate_list", [])) > 0
-                and props.active_cost_schedule_id != 0
-                and props.active_cost_item is not None
-            )
-        except:
-            return False
-
-    def _execute(self, context):
-        from bonsai import tool
-        selected_rate = bpy.context.scene.xml_rate_list[bpy.context.scene.xml_rate_list_active_index]
-        file = tool.Ifc.get()
-        create_cost_item(file, selected_rate=selected_rate, create_new_item=False,
-            combine_desc=context.scene.xml_rate_combine_desc)
-
-
-class ImportRateToActiveCostSchedule(*_IfcOperatorBase):
-    """Add a new cost item to the active schedule with selected rate data."""
-
-    bl_idname = "import.xml_rate_add_cost_item"
-    bl_label = "Import Rate to Active Cost Schedule"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            props = bpy.context.scene.BIMCostProperties
-            return (
-                len(getattr(bpy.context.scene, "xml_rate_list", [])) > 0
-                and props.active_cost_schedule_id != 0
-                and props.active_cost_item is not None
-            )
-        except:
-            return False
-
-    def _execute(self, context):
-        from bonsai import tool
-        selected_rate = bpy.context.scene.xml_rate_list[bpy.context.scene.xml_rate_list_active_index]
-        file = tool.Ifc.get()
-        create_cost_item(file, selected_rate=selected_rate, create_new_item=True,
-            combine_desc=context.scene.xml_rate_combine_desc)
-
-
-class AssignRateValue(*_IfcOperatorBase):
-    """Assign the selected rate as the cost value of the active cost item."""
-
-    bl_idname = "import.xml_rate_assign_cost_value"
-    bl_label = "Assign Cost Rate Value"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            if context.scene.rate_source_mode != 'IFC_SCHEDULE':
-                return False
-            props = context.scene.BIMCostProperties
-            if str(props.active_cost_schedule_id) == context.scene.ifc_rate_source_schedule:
-                return False
-            if props.active_cost_schedule_id == 0 or props.active_cost_item is None:
-                return False
-            selected = context.scene.xml_rate_list[context.scene.xml_rate_list_active_index]
-            return json.loads(selected.attributes).get("ifc_id", 0) != 0
-        except:
-            return False
-
-    def _execute(self, context):
-        from bonsai import tool
-        from bonsai.core import cost as cost_core
-        import bonsai.bim.module.cost.data
-        selected = context.scene.xml_rate_list[context.scene.xml_rate_list_active_index]
-        ifc_id = json.loads(selected.attributes).get("ifc_id", 0)
-        file = tool.Ifc.get()
-        cost_item = file.by_id(context.scene.BIMCostProperties.active_cost_item.ifc_definition_id)
-        cost_rate = file.by_id(ifc_id)
-        cost_core.assign_cost_value(tool.Ifc, tool.Cost, cost_item=cost_item, cost_rate=cost_rate)
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
-
-
-class RATE_UL_xml_list(bpy.types.UIList):
-    def draw_filter(self, context, layout):
-        # Only show search box, no other filter options
-        layout.prop(self, "filter_name", text="", icon="VIEWZOOM")
-
-    def draw_item(
-        self, context, layout, data, item, icon, active_data, active_propname, index
-    ):
-        # Add indentation based on level
-        rate_attrib = json.loads(item.attributes)
-        layout.alignment = "LEFT"
-        if rate_attrib["is_parent"]:
-            # Parent with expand/collapse
-            icon_expand = "DOWNARROW_HLT" if item.is_expanded else "RIGHTARROW"
-            row = layout.row()
-            row.alignment = "RIGHT"
-            if item.level != 0:
-                row.label(text="  " * item.level)
-            op = row.operator(
-                "xml_rate_list_ui.toggle", text="", icon=icon_expand, emboss=False
-            )
-            row.label(text=item.name)
-            op.index = index
-        else:
-            # Child item
-            layout.label(text="          " * item.level + item.name)
-
-    def filter_items(self, context, data, propname):
-        items = getattr(data, propname)
-        flt_flags = []
-        flt_neworder = []
-
-        # Get search filter from UIList
-        if self.filter_name:
-            # Use Blender's built-in search functionality
-            flt_flags = bpy.types.UI_UL_list.filter_items_by_name(
-                self.filter_name,
-                self.bitflag_filter_item,
-                items,
-                "name",
-                reverse=self.use_filter_sort_reverse,
-            )
-            # make sure hierarchy is shown during item search
-            search_filtered_flags = flt_flags[:]
-            for i, item in enumerate(items):
-                if flt_flags[i] & self.bitflag_filter_item:
-                    for parent_idx in [int(p) for p in item.parents.split(",") if p.strip()]:
-                        search_filtered_flags[parent_idx] = self.bitflag_filter_item
-            flt_flags = search_filtered_flags
-            
-            # Apply expand/collapse logic on top of search filter
-            final_flags = []
-            hide_next = False
-            hide_level = 10
-            for i, item in enumerate(items):
-                show_item = (flt_flags[i] & self.bitflag_filter_item) != 0
-                
-                if show_item:
-                    if hide_next:
-                        if item.level <= hide_level:
-                            show_item = True
-                            if item.is_expanded:
-                                hide_next = False
-                            else:
-                                hide_next = True
-                                hide_level = item.level
-                        else:
-                            show_item = False
-                    else:
-                        show_item = True
-                        if item.is_expanded:
-                            hide_next = False
-                        else:
-                            hide_next = True
-                            hide_level = item.level
-                
-                final_flags.append(self.bitflag_filter_item if show_item else 0)
-            flt_flags = final_flags
-
-        else:
-            hide_next = False
-            hide_level = 10
-            for item in items:
-                show_item = True
-                if hide_next:
-                    if item.level <= hide_level:
-                        show_item = True
-                        if item.is_expanded:
-                            hide_next = False
-                        else:
-                            hide_next = True
-                            hide_level = item.level
-                    else:
-                        show_item = False
-                else:
-                    show_item = True
-                    if item.is_expanded:
-                        hide_next = False
-                    else:
-                        hide_next = True
-                        hide_level = item.level
-
-                flt_flags.append(self.bitflag_filter_item if show_item else 0)
-
-        return flt_flags, flt_neworder
-
-
-class CUSTOM_OT_toggle(Operator):
-    bl_idname = "xml_rate_list_ui.toggle"
-    bl_label = "Toggle"
-
-    index: bpy.props.IntProperty()
-
-    def execute(self, context):
-        item = context.scene.xml_rate_list[self.index]
-        item.is_expanded = not item.is_expanded
-        # keep the list order while expanding/collapsing by updating the active index to the toggled item
-        context.scene.xml_rate_list_active_index = self.index
-        return {"FINISHED"}
-
-
-class CUSTOM_OT_collapse_to_level_0(Operator):
-    bl_idname = "xml_rate_list_ui.collapse_to_level_0"
-    bl_label = "Collapse to Level 0"
-
-    def execute(self, context):
-        items = context.scene.xml_rate_list
-        for item in items:
-            if item.is_parent:
-                item.is_expanded = item.level < 0
-        return {"FINISHED"}
-
-
-class CUSTOM_OT_collapse_to_level_1(Operator):
-    bl_idname = "xml_rate_list_ui.collapse_to_level_1"
-    bl_label = "Collapse to Level 1"
-
-    def execute(self, context):
-        items = context.scene.xml_rate_list
-        for item in items:
-            if item.is_parent:
-                item.is_expanded = item.level < 1
-        return {"FINISHED"}
-
-
-class CUSTOM_OT_expand_all(Operator):
-    bl_idname = "xml_rate_list_ui.expand_all"
-    bl_label = "Expand All"
-
-    def execute(self, context):
-        items = context.scene.xml_rate_list
-        for item in items:
-            if item.is_parent:
-                item.is_expanded = True
-        return {"FINISHED"}
-
-
-class RateListPropGroup(bpy.types.PropertyGroup):
-    name: bpy.props.StringProperty()
-    level: bpy.props.IntProperty()
-    is_parent: bpy.props.BoolProperty()
-    parents: bpy.props.StringProperty()
-    attributes: bpy.props.StringProperty()
-    is_expanded: bpy.props.BoolProperty(default=True)
-
-
-class RateListPanel(bpy.types.Panel):
-    bl_label = "Rate List Importer"
-    bl_idname = "SCENE_PT_xml_rate_list"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Bonsai5D+"
-    bl_options = {"DEFAULT_CLOSED"}
-    active_item_info = "no item selected"
-
-    def get_active_item_info(self, context):
-        return RateListPanel.active_item_info
-
-    def rate_list_selection_callback(self, context):
-        selected_rate = bpy.context.scene.xml_rate_list.items()[
-            bpy.context.scene.xml_rate_list_active_index
-        ][1]
-        attrib = json.loads(selected_rate.attributes)
-        new_label = ""
-        new_label += attrib["id"] + "\n"
-        new_label += attrib["name"] + "\n"
-        new_label += str(attrib["unit"] or "-") + "\n"
-        new_label += str(round(attrib["value"], 2) or "-") + "\n"
-        new_label += str(round(attrib["labor"], 2) or "-") + "\n"
-        new_label += str(round(attrib["equipment"], 2) or "-") + "\n"
-        new_label += str(round(attrib["materials"], 2) or "-") + "\n"
-        new_label += str(round(attrib["safety"], 2) or "-") + "\n"
-        new_label += "Description:\n"
-        description = textwrap.wrap(attrib["desc"], 100)
-        for row in description:
-            new_label += row + "\n"
-
-        RateListPanel.active_item_info = new_label
-
-    def draw(self, context):
-        layout = self.layout
-        row = layout.row(align=True)
-        row.prop(context.scene, "rate_source_mode", expand=True)
-        row = layout.row(align=True)
-        if context.scene.rate_source_mode == 'FILE':
-            row.prop(context.scene, "xml_rate_recent_path", text="")
-            row.operator(ImportRateList.bl_idname, text="", icon="ADD")
-        else:
-            row.prop(context.scene, "ifc_rate_source_schedule", text="")
-            row.operator(IFC_OT_rate_source_refresh.bl_idname, text="", icon="FILE_REFRESH")
-        row = layout.row()
-        row.operator(CUSTOM_OT_collapse_to_level_0.bl_idname, text="Collapse")
-        row.operator(CUSTOM_OT_collapse_to_level_1.bl_idname, text="To Level 1")
-        row.operator(CUSTOM_OT_expand_all.bl_idname, text="Expand All")
-        layout.template_list(
-            "RATE_UL_xml_list",
-            "",
-            context.scene,
-            "xml_rate_list",
-            context.scene,
-            "xml_rate_list_active_index",
-            rows=8,
-        )  # More rows for large lists
-        box = layout.box()
-        row = box.row()
-        rate_info = self.get_active_item_info(context).split("\n")
-        if len(rate_info) > 5:  # arbitrary value to check the list  is populated
-            row.label(text=rate_info[0])
-            btn_row = row.row(align=True)
-            btn_row.alignment = "RIGHT"
-            btn_row.prop(context.scene, "xml_rate_combine_desc", text="", icon="OUTLINER", toggle=True)
-            btn_row.separator(factor=2.0)
-            btn_row.operator(
-                ImportRateToActiveCostSchedule.bl_idname, text="", icon="ADD"
-            )
-            btn_row.operator(
-                UpdateActiveCostItem.bl_idname, text="", icon="FILE_REFRESH"
-            )
-            btn_row.operator(
-                AssignRateValue.bl_idname, text="", icon="COPYDOWN"
-            )
-            row = box.row()
-            box.label(text=rate_info[1])
-            row = box.row()
-            row.label(text="unit: " + rate_info[2])
-            row.label(text="value: " + rate_info[3])
-            box = layout.box()
-            box.label(text="Cost Value Components:")
-            row = box.row()
-            row.label(text="labor: " + rate_info[4])
-            row.label(text="equipment: " + rate_info[5])
-            row = box.row()
-            row.label(text="materials: " + rate_info[6])
-            row.label(text="safety: " + rate_info[7])
-            box = layout.box()
-            for row in rate_info[8:]:
-                box.label(text=row)
-
-
-class IFC_OT_rate_source_refresh(Operator):
-    bl_idname = "ifc_rate_source.refresh"
-    bl_label = "Refresh Schedules"
-
-    def execute(self, context):
-        _refresh_ifc_schedules_cache()
-        schedule_id = context.scene.ifc_rate_source_schedule
-        if schedule_id and schedule_id != '__NONE__':
-            _do_import_ifc(schedule_id, context)
-        return {"FINISHED"}
-
-
-classes = [
-    RATE_UL_xml_list,
-    CUSTOM_OT_toggle,
-    CUSTOM_OT_collapse_to_level_0,
-    CUSTOM_OT_collapse_to_level_1,
-    CUSTOM_OT_expand_all,
-    IFC_OT_rate_source_refresh,
-    UpdateActiveCostItem,
-    ImportRateToActiveCostSchedule,
-    AssignRateValue,
-    ImportRateList,
-    RateListPropGroup,
-    RateListPanel,
-]
-
-
-class_register, class_unregister = bpy.utils.register_classes_factory(classes)
-
-
-def register():
-    class_register()
-    bpy.types.Scene.xml_rate_list = bpy.props.CollectionProperty(type=RateListPropGroup)
-    bpy.types.Scene.xml_rate_list_active_index = bpy.props.IntProperty(
-        update=RateListPanel.rate_list_selection_callback
-    )
-    bpy.types.Scene.xml_rate_title = bpy.props.StringProperty(name="Rate Title", default="")
-    bpy.types.Scene.xml_rate_year = bpy.props.StringProperty(name="Rate Year", default="")
-    bpy.types.Scene.xml_rate_combine_desc = bpy.props.BoolProperty(
-        name="Combine Description with Parent",
-        description="Prepend the parent item description to the selected item description",
-        default=False,
-    )
-    bpy.types.Scene.xml_rate_recent_path = bpy.props.EnumProperty(
-        name="Recent Price Lists",
-        description="Recently opened price lists — select to load",
-        items=_get_recent_items,
-        update=_on_recent_select,
-    )
-    bpy.types.Scene.rate_source_mode = bpy.props.EnumProperty(
-        name="Source",
-        items=[
-            ('FILE', "External Rate List", "Load from XML or XPWE file"),
-            ('IFC_SCHEDULE', "Current Project Rate List", "Load from a cost schedule in the current IFC project"),
-        ],
-        default='FILE',
-        update=_on_source_mode_change,
-    )
-    bpy.types.Scene.ifc_rate_source_schedule = bpy.props.EnumProperty(
-        name="IFC Rate Schedule",
-        description="Select a cost schedule from the current IFC project as rate source",
-        items=_get_ifc_schedules,
-        update=_on_ifc_schedule_select,
-    )
-    _refresh_recent_cache()
-    _refresh_ifc_schedules_cache()
-
-
-def unregister():
-    class_unregister()
-    del bpy.types.Scene.xml_rate_list
-    del bpy.types.Scene.xml_rate_list_active_index
-    del bpy.types.Scene.xml_rate_title
-    del bpy.types.Scene.xml_rate_year
-    del bpy.types.Scene.xml_rate_combine_desc
-    del bpy.types.Scene.xml_rate_recent_path
-    del bpy.types.Scene.rate_source_mode
-    del bpy.types.Scene.ifc_rate_source_schedule
-

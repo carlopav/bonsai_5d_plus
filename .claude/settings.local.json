@@ -16,7 +16,22 @@
       "Bash(gh repo *)",
       "Bash(python -c ' *)",
       "Bash(\"C:\\\\Program Files\\\\Blender Foundation\\\\Blender 5.1\\\\blender.exe\" --background --python \"c:\\\\Users\\\\cp\\\\Documents\\\\bonsai_5d_plus\\\\tools\\\\generate_classifications.py\")",
-      "Bash(Select-String \"Written|Error|Traceback\")"
+      "Bash(Select-String \"Written|Error|Traceback\")",
+      "Bash(python tools/generate_classifications.py)",
+      "PowerShell(Get-Command blender -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\cp\\\\AppData\\\\Roaming\\\\Blender Foundation\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(grep -r \"assigned cost item rate\\\\|IsNestedBy\\\\|assigned.*rate\\\\|cost item rate\" /c/Users/cp/Documents/IfcOpenShell/src/bonsai/bonsai/bim/module/cost/ --include=\"*.py\" -l 2>/dev/null)",
+      "Read(//c/Users/cp/Documents/IfcOpenShell/src/bonsai/bonsai/bim/module/cost//**)",
+      "Bash(grep -rn \"def get_cost_schedule\\\\|def get_assigned_rate_cost_item\" /c/Users/cp/Documents/IfcOpenShell/src/bonsai/ --include=\"*.py\")",
+      "Read(//c/Users/cp/Documents/IfcOpenShell/src/bonsai//**)",
+      "Bash(grep -n \"def get_cost_schedule\" /c/Users/cp/Documents/IfcOpenShell/src/ifcopenshell/util/cost.py | head -5)",
+      "Read(//c/Users/cp/Documents/IfcOpenShell/src/ifcopenshell/util/**)",
+      "Bash(find /c/Users/cp -path \"*/ifcopenshell/util/cost.py\" 2>/dev/null | head -5)",
+      "Read(//c/Users/cp/**)",
+      "PowerShell(Remove-Item \"c:\\\\Users\\\\cp\\\\Documents\\\\bonsai_5d_plus\\\\src\\\\bonsai_5d_plus\\\\XpweImportExport.py\" -Confirm:$false)",
+      "Bash(git checkout *)",
+      "Bash(git add *)"
     ]
   }
 }
