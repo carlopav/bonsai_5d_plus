@@ -20,6 +20,15 @@ _ifc_schedules_cache = []
 # Replaces RateListPanel.active_item_info (class var) — accessed by ui.py
 active_item_info = "no item selected"
 
+# Filter cache invalidation counter — incremented whenever list data or
+# expand/collapse state changes so filter_items can skip recomputation.
+_filter_gen = 0
+
+
+def _invalidate_filter_cache():
+    global _filter_gen
+    _filter_gen += 1
+
 
 # Recent files ────────────────────────────────────────────────────────────────
 
@@ -129,9 +138,9 @@ def _on_rate_selection_change(self, context):
     """Called when xml_rate_list_active_index changes — updates active_item_info."""
     global active_item_info
     try:
-        selected_rate = bpy.context.scene.xml_rate_list.items()[
+        selected_rate = bpy.context.scene.xml_rate_list[
             bpy.context.scene.xml_rate_list_active_index
-        ][1]
+        ]
         attrib = json.loads(selected_rate.attributes)
         new_label = ""
         new_label += attrib["id"] + "\n"
@@ -153,6 +162,7 @@ def _on_rate_selection_change(self, context):
 def _populate_list_from_parser(parser, context):
     context.scene.xml_rate_title = parser.title
     context.scene.xml_rate_year = parser.year
+    _invalidate_filter_cache()
     context.scene.xml_rate_list.clear()
     for rate in parser.xml_rate_list:
         item = context.scene.xml_rate_list.add()

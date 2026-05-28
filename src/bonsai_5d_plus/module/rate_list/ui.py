@@ -7,6 +7,7 @@ import json
 import bpy
 
 from . import data as _data
+from .data import _invalidate_filter_cache
 from .operator import (
     ImportRateList,
     UpdateActiveCostItem,
@@ -17,6 +18,9 @@ from .operator import (
     CUSTOM_OT_expand_all,
     IFC_OT_rate_source_refresh,
 )
+
+
+_filter_cache: dict = {}  # {(gen, filter_name, sort_reverse): (flt_flags, flt_neworder)}
 
 
 class RATE_UL_xml_list(bpy.types.UIList):
@@ -39,6 +43,10 @@ class RATE_UL_xml_list(bpy.types.UIList):
             layout.label(text="          " * item.level + item.name)
 
     def filter_items(self, context, data, propname):
+        cache_key = (_data._filter_gen, self.filter_name, self.use_filter_sort_reverse)
+        if cache_key in _filter_cache:
+            return _filter_cache[cache_key]
+
         items = getattr(data, propname)
         flt_flags = []
         flt_neworder = []
@@ -99,6 +107,8 @@ class RATE_UL_xml_list(bpy.types.UIList):
                         hide_level = item.level
                 flt_flags.append(self.bitflag_filter_item if show_item else 0)
 
+        _filter_cache.clear()
+        _filter_cache[cache_key] = (flt_flags, flt_neworder)
         return flt_flags, flt_neworder
 
 

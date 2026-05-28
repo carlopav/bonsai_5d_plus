@@ -8,7 +8,7 @@ import bpy
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper
 
-from .data import _do_import, _do_import_ifc, _refresh_ifc_schedules_cache
+from .data import _do_import, _do_import_ifc, _refresh_ifc_schedules_cache, _invalidate_filter_cache
 from ...tool.cost import create_cost_item
 
 try:
@@ -152,6 +152,7 @@ class CUSTOM_OT_toggle(Operator):
         item = context.scene.xml_rate_list[self.index]
         item.is_expanded = not item.is_expanded
         context.scene.xml_rate_list_active_index = self.index
+        _invalidate_filter_cache()
         return {"FINISHED"}
 
 
@@ -163,6 +164,7 @@ class CUSTOM_OT_collapse_to_level_0(Operator):
         for item in context.scene.xml_rate_list:
             if item.is_parent:
                 item.is_expanded = item.level < 0
+        _invalidate_filter_cache()
         return {"FINISHED"}
 
 
@@ -174,6 +176,7 @@ class CUSTOM_OT_collapse_to_level_1(Operator):
         for item in context.scene.xml_rate_list:
             if item.is_parent:
                 item.is_expanded = item.level < 1
+        _invalidate_filter_cache()
         return {"FINISHED"}
 
 
@@ -185,6 +188,7 @@ class CUSTOM_OT_expand_all(Operator):
         for item in context.scene.xml_rate_list:
             if item.is_parent:
                 item.is_expanded = True
+        _invalidate_filter_cache()
         return {"FINISHED"}
 
 
