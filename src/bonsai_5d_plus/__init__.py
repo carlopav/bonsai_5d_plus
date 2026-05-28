@@ -15,13 +15,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Bonsai5D+.  If not, see <http://www.gnu.org/licenses/>.
-#
-# This file was modified with the assistance of an AI coding tool.
 
 bl_info = {
     "name": "Bonsai5D+",
     "author": "carlopav",
-    "version": (0, 2, 0),
+    "version": (0, 0, 2),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Rate List",
     "description": (
@@ -33,24 +31,26 @@ bl_info = {
 
 import traceback
 
-from . import RateListImporter
-from . import RateAnalysis
-from . import BoQToScheduleOfRates
-from . import BulkUpdateCostSchedule
-from . import CostClassification
-from . import TenderComparison
-from . import SvgToPdf
-from . import ImportExport
+from .module import (
+    rate_list,
+    rate_analysis,
+    boq_to_sor,
+    bulk_update,
+    classification,
+    tender,
+    svg_to_pdf,
+    import_export,
+)
 
 _MODULES = [
-    RateListImporter,
-    RateAnalysis,
-    BoQToScheduleOfRates,
-    BulkUpdateCostSchedule,
-    CostClassification,
-    TenderComparison,
-    SvgToPdf,
-    ImportExport,
+    rate_list,
+    rate_analysis,
+    boq_to_sor,
+    bulk_update,
+    classification,
+    tender,
+    svg_to_pdf,
+    import_export,
 ]
 
 

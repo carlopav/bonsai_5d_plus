@@ -1,35 +1,17 @@
 # Bonsai - OpenBIM 5D Blender Add-on based on Bonsai
 # Copyright (C) 2026 Carlo Pavan <carlopav@gmail.com>
 #
-# This file is part of Bonsai5D+.
-#
-# Bonsai5D+ is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Bonsai5D+ is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Bonsai5D+.  If not, see <http://www.gnu.org/licenses/>.
-#
-# This file was modified with the assistance of an AI coding tool.
+# This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
-import bpy
 import os
 import sys
 import xml.etree.ElementTree as ET
 
+import bpy
+
 _SVG_NS = "http://www.w3.org/2000/svg"
 _XLINK_NS = "http://www.w3.org/1999/xlink"
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _get_ifc():
     try:
@@ -48,7 +30,6 @@ def _get_ifc_path():
 
 
 def _ensure_typst():
-    """Try to import typst, augmenting sys.path with Blender extensions if needed."""
     try:
         import typst  # noqa: F401
         return True
@@ -69,13 +50,6 @@ def _ensure_typst():
 
 
 def _find_sheet_svgs():
-    """Return absolute SVG paths for all sheet IfcDocumentInformation in the project.
-
-    Bonsai stores sheets as IfcDocumentInformation(Scope='SHEET') but does not write
-    the SVG path into Location — it derives it as:
-        <ifc_dir>/sheets/<Identification> - <Name>.svg
-    We replicate that logic, with get_document_uri and Location as prior attempts.
-    """
     ifc = _get_ifc()
     if ifc is None:
         return []
@@ -98,7 +72,6 @@ def _find_sheet_svgs():
 
         path = None
 
-        # 1. bonsai.tool.Drawing.get_document_uri (may compute path even without Location)
         if _get_uri is not None:
             try:
                 path = _get_uri(doc)
@@ -107,7 +80,6 @@ def _find_sheet_svgs():
         if path and not os.path.isfile(path):
             path = None
 
-        # 2. Location attribute (if set)
         if not path:
             loc = getattr(doc, "Location", None) or ""
             if loc:
@@ -116,7 +88,6 @@ def _find_sheet_svgs():
                 if os.path.isfile(p):
                     path = p
 
-        # 3. Bonsai naming convention: sheets/<Identification> - <Name>.svg
         if not path:
             ident = getattr(doc, "Identification", None) or ""
             name = getattr(doc, "Name", None) or ""
@@ -136,13 +107,6 @@ def _find_sheet_svgs():
 
 
 def _inline_svg_images(svg_path, _depth=0):
-    """Return SVG bytes with every <image href="*.svg"> replaced by inline SVG content.
-
-    Typst cannot render SVG-within-SVG (e.g. Bonsai titleblocks and embedded drawings).
-    Handles URL-encoded hrefs (Bonsai on Windows uses %5C for backslash, %20 for space).
-    Recurses into each sub-SVG so nested references are resolved before embedding.
-    Returns None when no nested SVG images are found so the caller skips the temp-file step.
-    """
     from urllib.parse import unquote
 
     if _depth > 8:
@@ -171,7 +135,7 @@ def _inline_svg_images(svg_path, _depth=0):
     to_replace = []
     for el in root.iter(f"{{{_SVG_NS}}}image"):
         href_raw = el.get(f"{{{_XLINK_NS}}}href") or el.get("href") or ""
-        href = unquote(href_raw)  # decode %5C→\ %20→space etc.
+        href = unquote(href_raw)
         if href.lower().endswith(".svg"):
             p = href if os.path.isabs(href) else os.path.join(svg_dir, href.replace("/", os.sep))
             p = os.path.normpath(p)
@@ -185,7 +149,6 @@ def _inline_svg_images(svg_path, _depth=0):
         parent = parent_map.get(image_el)
         if parent is None:
             continue
-        # Recursively inline any SVG references inside the sub-SVG before embedding
         sub_inlined = _inline_svg_images(img_path, _depth + 1)
         if sub_inlined is not None:
             sub_root = ET.fromstring(sub_inlined)
@@ -204,14 +167,11 @@ def _inline_svg_images(svg_path, _depth=0):
 
 
 def _svg_to_pdf(svg_path):
-    """Compile one SVG to a PDF with the same stem in the same folder."""
     import typst
     import tempfile
 
     pdf_path = os.path.splitext(svg_path)[0] + ".pdf"
     svg_dir = os.path.dirname(svg_path)
-    # project_dir is one level above sheets/ — matches Bonsai's file layout and
-    # lets typst resolve paths like "titleblocks/A1.svg" from the project root.
     project_dir = os.path.dirname(svg_dir)
 
     inlined = _inline_svg_images(svg_path)
@@ -236,10 +196,6 @@ def _svg_to_pdf(svg_path):
 
     return pdf_path
 
-
-# ---------------------------------------------------------------------------
-# Operator
-# ---------------------------------------------------------------------------
 
 class ExportSheetsToPdfOperator(bpy.types.Operator):
     """Convert all Bonsai sheet SVGs to PDF via typst, saved alongside the SVGs."""
@@ -291,37 +247,4 @@ class ExportSheetsToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-# ---------------------------------------------------------------------------
-# Panel
-# ---------------------------------------------------------------------------
-
-class SvgToPdfPanel(bpy.types.Panel):
-    bl_label = "Print to PDF"
-    bl_idname = "SCENE_PT_svg_to_pdf"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Bonsai5D+"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        layout = self.layout
-        if _get_ifc() is None:
-            layout.label(text="No IFC file loaded.", icon="ERROR")
-            return
-        layout.operator(ExportSheetsToPdfOperator.bl_idname, icon="FILE_BLANK")
-
-
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-
-classes = [ExportSheetsToPdfOperator, SvgToPdfPanel]
-class_register, class_unregister = bpy.utils.register_classes_factory(classes)
-
-
-def register():
-    class_register()
-
-
-def unregister():
-    class_unregister()
+classes = [ExportSheetsToPdfOperator]

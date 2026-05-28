@@ -15,34 +15,125 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Bonsai5D+.  If not, see <http://www.gnu.org/licenses/>.
-#
-# This file was modified with the assistance of an AI coding tool.
 
-import os
+"""Shared IFC cost helpers — used by module/rate_list and module/import_export."""
 
-import bpy
-from bpy.types import Operator, Panel
-from bpy_extras.io_utils import ImportHelper
+import json
 
-from .RateListImporter import ParserXpwe, PriceListParser
-
-
-# ---------------------------------------------------------------------------
-# XPWE import helpers
-# ---------------------------------------------------------------------------
 
 def _ifc_str(s):
-    """Strip whitespace; return None if the result is empty (IfcLabel must be non-empty)."""
+    """Strip whitespace; return None if empty (IfcLabel must be non-empty)."""
     s = (s or "").strip()
     return s or None
 
 
-def _build_schedule_from_xpwe(parser, schedule_name, report=None):
-    """Create a new IfcCostSchedule (EPU) from parser.xml_rate_list.
+def _refresh_ui(tool):
+    """Refresh the cost schedule tree if one is active."""
+    import bpy
+    import bonsai.bim.module.cost.data
+    bonsai.bim.module.cost.data.refresh()
+    if bpy.context.scene.BIMCostProperties.active_cost_schedule_id != 0:
+        tool.Cost.load_cost_schedule_tree()
 
-    Returns (True, ep_ifc_map) on success where ep_ifc_map maps
-    {xml_ep_id: IfcCostItem} for use by the CME builder.
-    Returns (False, {}) on failure.
+
+# ---------------------------------------------------------------------------
+# Rate list → cost item creation
+# ---------------------------------------------------------------------------
+
+def get_parent_desc(selected_rate):
+    import bpy
+    rate_attrib = json.loads(selected_rate.attributes)
+    parent_indices = [p for p in rate_attrib.get("parents", "").split(",") if p.strip()]
+    if not parent_indices:
+        return ""
+    parent_idx = int(parent_indices[-1])
+    items = bpy.context.scene.xml_rate_list
+    if parent_idx < len(items):
+        return json.loads(items[parent_idx].attributes).get("desc", "")
+    return ""
+
+
+def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=False):
+    import bpy
+    from bonsai import tool
+    import ifcopenshell.util.cost
+    import bonsai.bim.module.cost.data
+
+    active_ui_cost_item = bpy.context.scene.BIMCostProperties.active_cost_item
+    active_ifc_cost_item = file.by_id(active_ui_cost_item.ifc_definition_id)
+
+    if create_new_item:
+        if active_ifc_cost_item in ifcopenshell.util.cost.get_root_cost_items(
+            file.by_id(bpy.context.scene.BIMCostProperties.active_cost_schedule_id)
+        ):
+            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item)
+        elif active_ui_cost_item.has_children:
+            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item)
+        else:
+            cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=active_ifc_cost_item.Nests[0].RelatingObject)
+    else:
+        cost_item = active_ifc_cost_item
+        if cost_item.CostValues:
+            for cost_value in list(cost_item.CostValues):
+                tool.Ifc.run("cost.remove_cost_value", parent=cost_item, cost_value=cost_value)
+
+    rate_attrib = json.loads(selected_rate.attributes)
+    if combine_desc:
+        parent_desc = get_parent_desc(selected_rate)
+        desc = (parent_desc + "\n" + rate_attrib["desc"]).strip() if parent_desc else rate_attrib["desc"]
+    else:
+        desc = rate_attrib["desc"]
+
+    tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={
+        "Identification": rate_attrib["id"],
+        "Name": rate_attrib["name"],
+        "Description": desc,
+    })
+
+    labor = float(rate_attrib["labor"])
+    equipment = float(rate_attrib["equipment"])
+    materials = float(rate_attrib["materials"])
+    safety = float(rate_attrib["safety"])
+    total_value = float(rate_attrib["value"])
+
+    components = [
+        ("Labor", labor),
+        ("Equipment", equipment),
+        ("Materials", materials),
+        ("Safety", safety),
+    ]
+    has_components = any(v != 0.0 for _, v in components)
+
+    if not has_components:
+        cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
+                     attributes={"AppliedValue": round(total_value, 2)})
+    else:
+        remaining = round(total_value - sum(v for _, v in components), 2)
+        if remaining != 0.0:
+            cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+            tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
+                         attributes={"AppliedValue": remaining})
+        for category, amount in components:
+            if amount != 0.0:
+                cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+                tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value, attributes={
+                    "Category": category,
+                    "AppliedValue": round(amount, 2),
+                })
+
+    _refresh_ui(tool)
+
+
+# ---------------------------------------------------------------------------
+# XPWE → IFC schedule builders
+# ---------------------------------------------------------------------------
+
+def build_schedule_from_xpwe(parser, schedule_name, report=None):
+    """Create a new IfcCostSchedule (EPU/SoR) from parser.xml_rate_list.
+
+    Returns (True, ep_ifc_map) on success, (False, {}) on failure.
+    ep_ifc_map maps {xml_ep_id: IfcCostItem} for the CME linker.
     """
     try:
         from bonsai import tool
@@ -73,8 +164,8 @@ def _build_schedule_from_xpwe(parser, schedule_name, report=None):
             if not parent_indices:
                 cost_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
             else:
-                parent_ifc = index_to_ifc[parent_indices[-1]]
-                cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=parent_ifc)
+                cost_item = tool.Ifc.run("cost.add_cost_item",
+                                         cost_item=index_to_ifc[parent_indices[-1]])
 
             tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={
                 "Identification": _ifc_str(rate["id"]),
@@ -84,16 +175,11 @@ def _build_schedule_from_xpwe(parser, schedule_name, report=None):
 
             if not rate["is_parent"]:
                 value = float(rate["value"])
-                labor = float(rate["labor"])
-                equipment = float(rate["equipment"])
-                materials = float(rate["materials"])
-                safety = float(rate["safety"])
-
                 components = [
-                    ("Labor", labor),
-                    ("Equipment", equipment),
-                    ("Materials", materials),
-                    ("Safety", safety),
+                    ("Labor",     float(rate["labor"])),
+                    ("Equipment", float(rate["equipment"])),
+                    ("Materials", float(rate["materials"])),
+                    ("Safety",    float(rate["safety"])),
                 ]
                 has_components = any(v != 0.0 for _, v in components)
 
@@ -118,33 +204,29 @@ def _build_schedule_from_xpwe(parser, schedule_name, report=None):
 
             index_to_ifc[rate["index"]] = cost_item
 
-        # build xml_ep_id → IfcCostItem for the CME linker
         ep_ifc_map = {
             xml_id: index_to_ifc[ep["index"]]
             for xml_id, ep in parser._ep_by_xml_id.items()
             if ep["index"] in index_to_ifc
         }
 
-        bonsai.bim.module.cost.data.refresh()
-        import bpy as _bpy
-        if _bpy.context.scene.BIMCostProperties.active_cost_schedule_id != 0:
-            tool.Cost.load_cost_schedule_tree()
+        _refresh_ui(tool)
 
     except Exception as e:
         if report:
             import traceback
-            report({'ERROR'}, f"IFC import failed: {e}\n{traceback.format_exc()}")
+            report({'ERROR'}, f"EPU import failed: {e}\n{traceback.format_exc()}")
         return False, {}
 
     return True, ep_ifc_map
 
 
-def _build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
+def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
     """Create an IfcCostSchedule (CME/BoQ) from parser.xml_computo_list.
 
-    ep_ifc_map: {xml_ep_id: IfcCostItem} returned by _build_schedule_from_xpwe.
-    Each leaf item's rate is linked to the EPU IfcCostItem via assign_cost_value
-    so that price changes in the EPU propagate automatically.
+    ep_ifc_map: {xml_ep_id: IfcCostItem} from build_schedule_from_xpwe.
+    Each leaf item's rate is linked via assign_cost_value so SoR price
+    changes propagate automatically to the BoQ.
     """
     try:
         from bonsai import tool
@@ -191,14 +273,12 @@ def _build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
                 quantity = float(rate.get("quantity", 0.0))
 
                 if cost_rate is not None:
-                    # link to EPU item: price changes in the SoR propagate automatically
                     cost_core.assign_cost_value(
                         tool.Ifc, tool.Cost,
                         cost_item=cost_item,
                         cost_rate=cost_rate,
                     )
                 elif float(rate["value"]) != 0.0:
-                    # fallback: copy value directly (no EPU item found)
                     cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
                     tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
                                  attributes={"AppliedValue": round(float(rate["value"]), 2)})
@@ -212,10 +292,7 @@ def _build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
 
             index_to_ifc[rate["index"]] = cost_item
 
-        bonsai.bim.module.cost.data.refresh()
-        import bpy as _bpy
-        if _bpy.context.scene.BIMCostProperties.active_cost_schedule_id != 0:
-            tool.Cost.load_cost_schedule_tree()
+        _refresh_ui(tool)
 
     except Exception as e:
         if report:
@@ -224,120 +301,3 @@ def _build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
         return False
 
     return True
-
-
-# ---------------------------------------------------------------------------
-# Operators
-# ---------------------------------------------------------------------------
-
-class ImportXpweCostSchedule(bpy.types.Operator, ImportHelper):
-    """Import an XPWE file as a new IFC cost schedule (Elenco Prezzi → IfcCostSchedule)."""
-
-    bl_idname = "bonsai5d.import_xpwe_cost_schedule"
-    bl_label = "Import XPWE"
-    bl_options = {"REGISTER", "UNDO"}
-
-    filename_ext = ".xpwe"
-    filter_glob: bpy.props.StringProperty(
-        default="*.xpwe;*.xml",
-        options={"HIDDEN"},
-        maxlen=255,
-    )
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            from bonsai import tool
-            return tool.Ifc.get() is not None
-        except Exception:
-            return False
-
-    def execute(self, context):
-        xml_content = PriceListParser.get_xml_content(self.filepath)
-        parser = ParserXpwe()
-        parser.parse_items(xml_content)
-
-        if not parser.xml_rate_list:
-            self.report({'ERROR'}, "No items found in XPWE file")
-            return {"CANCELLED"}
-
-        base_name = os.path.splitext(os.path.basename(self.filepath))[0]
-
-        success, ep_ifc_map = _build_schedule_from_xpwe(
-            parser, f"{base_name} - EPU", self.report
-        )
-        if not success:
-            return {"CANCELLED"}
-
-        parser.parse_computo(xml_content)
-        if parser.xml_computo_list:
-            _build_cme_schedule(parser, f"{base_name} - CME", ep_ifc_map, self.report)
-
-        epu_count = sum(1 for r in parser.xml_rate_list if not r["is_parent"])
-        cme_count = sum(1 for r in parser.xml_computo_list if not r["is_parent"])
-        msg = f"Imported EPU ({epu_count} voci)"
-        if cme_count:
-            msg += f" + CME ({cme_count} voci)"
-        self.report({'INFO'}, msg)
-        return {"FINISHED"}
-
-
-class ExportXpweCostSchedule(bpy.types.Operator):
-    """Export the active IFC cost schedule to XPWE format."""
-
-    bl_idname = "bonsai5d.export_xpwe_cost_schedule"
-    bl_label = "Export XPWE"
-    bl_options = {"REGISTER"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
-        except Exception:
-            return False
-
-    def execute(self, context):
-        self.report({'WARNING'}, "XPWE export not yet implemented")
-        return {"CANCELLED"}
-
-
-# ---------------------------------------------------------------------------
-# Panel
-# ---------------------------------------------------------------------------
-
-class ImportExportPanel(bpy.types.Panel):
-    bl_label = "Import / Export"
-    bl_idname = "SCENE_PT_import_export"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Bonsai5D+"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        layout = self.layout
-
-        layout.label(text="XPWE (Primus / Computi)")
-        col = layout.column(align=True)
-        col.operator(ImportXpweCostSchedule.bl_idname, icon="IMPORT")
-        col.operator(ExportXpweCostSchedule.bl_idname, icon="EXPORT")
-
-
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-
-classes = [
-    ImportXpweCostSchedule,
-    ExportXpweCostSchedule,
-    ImportExportPanel,
-]
-
-class_register, class_unregister = bpy.utils.register_classes_factory(classes)
-
-
-def register():
-    class_register()
-
-
-def unregister():
-    class_unregister()
