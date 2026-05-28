@@ -160,22 +160,32 @@ def _on_rate_selection_change(self, context):
 
 
 def _populate_list_from_parser(parser, context):
+    _invalidate_filter_cache()
     context.scene.xml_rate_title = parser.title
     context.scene.xml_rate_year = parser.year
-    _invalidate_filter_cache()
     context.scene.xml_rate_list.clear()
-    for rate in parser.xml_rate_list:
-        item = context.scene.xml_rate_list.add()
-        if rate["is_parent"] and rate["name"].startswith("Group "):
-            item.name = rate["id"]
-        else:
-            item.name = (rate["id"] + " - " + rate["name"]).strip(" -") or f"Item {rate['index']}"
-        item.level = rate["level"]
-        item.is_parent = rate["is_parent"]
-        item.parents = rate["parents"]
-        item.attributes = json.dumps(rate)
-        if item.is_parent:
-            item.is_expanded = False
+
+    rates = parser.xml_rate_list
+    wm = context.window_manager
+    try:
+        wm.progress_begin(0, len(rates))
+        for i, rate in enumerate(rates):
+            if i % 100 == 0:
+                wm.progress_update(i)
+            item = context.scene.xml_rate_list.add()
+            if rate["is_parent"] and rate["name"].startswith("Group "):
+                item.name = rate["id"]
+            else:
+                item.name = (rate["id"] + " - " + rate["name"]).strip(" -") or f"Item {rate['index']}"
+            item.level = rate["level"]
+            item.is_parent = rate["is_parent"]
+            item.parents = rate["parents"]
+            item.attributes = json.dumps(rate)
+            if item.is_parent:
+                item.is_expanded = False
+    finally:
+        wm.progress_end()
+
     if len(context.scene.xml_rate_list) > 0:
         context.scene.xml_rate_list_active_index = 0
 
