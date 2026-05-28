@@ -958,6 +958,8 @@ class ParserXpwe(PriceListParser):
 
             id_ep = self._text(vc, "IDEP")
             quantita = self._float(self._text(vc, "Quantita"))
+            des_voce = self.clean_string(self._text(vc, "Descrizione"))
+            rg_items = self._parse_rg_items(vc)
             id_spcat = self._text(vc, "IDSpCat")
             id_cat = self._text(vc, "IDCat")
             id_sbcat = self._text(vc, "IDSbCat")
@@ -1018,12 +1020,59 @@ class ParserXpwe(PriceListParser):
                 "unit": ep.get("unit", ""),
                 "value": ep.get("value", 0.0),
                 "quantity": quantita,
+                "qty_name": des_voce,
+                "rg_items": rg_items,
                 "labor": ep.get("labor", 0.0),
                 "equipment": ep.get("equipment", 0.0),
                 "materials": ep.get("materials", 0.0),
                 "safety": ep.get("safety", 0.0),
             })
             index += 1
+
+    def _parse_rg_items(self, vc_elem):
+        """Parse RGItem children of a VCItem into a list of measurement row dicts.
+
+        RGItem.Quantita stores the VCItem total (not the individual row value).
+        The row quantity must be computed as PartiUguali × Lunghezza × Larghezza × HPeso.
+        Expressions like '17.3+1+1' are evaluated via _eval_expr.
+        """
+        rows = []
+        for rg in vc_elem.findall("PweVCMisure/RGItem"):
+            desc = self.clean_string(self._text(rg, "Descrizione"))
+            formula_parts = []
+            qty = 1.0
+            has_field = False
+            for tag in ("PartiUguali", "Lunghezza", "Larghezza", "HPeso"):
+                raw = self._text(rg, tag).strip()
+                if not raw:
+                    continue
+                has_field = True
+                try:
+                    float(raw.replace(",", "."))
+                    formula_parts.append(raw)
+                except ValueError:
+                    formula_parts.append(f"({raw})")
+                val = self._eval_expr(raw)
+                if val is not None:
+                    qty *= val
+            rows.append({
+                "desc": desc,
+                "qty": round(qty, 6) if has_field else 0.0,
+                "formula": " × ".join(formula_parts),
+            })
+        return rows
+
+    @staticmethod
+    def _eval_expr(expr):
+        """Safely evaluate a simple arithmetic expression (digits, +-*/.() only)."""
+        import re
+        cleaned = expr.replace(",", ".").strip()
+        if not re.fullmatch(r'[\d\s\+\-\*\/\.\(\)]+', cleaned):
+            return None
+        try:
+            return float(eval(cleaned))
+        except Exception:
+            return None
 
 
 class ParserXmlSix(PriceListParser):

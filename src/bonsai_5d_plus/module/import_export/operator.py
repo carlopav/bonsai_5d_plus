@@ -25,6 +25,16 @@ class ImportXpweCostSchedule(bpy.types.Operator, ImportHelper):
         options={"HIDDEN"},
         maxlen=255,
     )
+    flatten_sor: bpy.props.BoolProperty(
+        name="Flatten SoR",
+        description="Group all EPU items under a single 'EPU' summary item instead of preserving the chapter hierarchy",
+        default=True,
+    )
+    import_measurement_rows: bpy.props.BoolProperty(
+        name="Import Measurement Rows",
+        description="Import individual RGItem rows as separate IFC quantities (with formula in Description) instead of the VCItem total",
+        default=False,
+    )
 
     @classmethod
     def poll(cls, context):
@@ -46,14 +56,18 @@ class ImportXpweCostSchedule(bpy.types.Operator, ImportHelper):
         base_name = os.path.splitext(os.path.basename(self.filepath))[0]
 
         success, ep_ifc_map = build_schedule_from_xpwe(
-            parser, f"{base_name} - EPU", self.report
+            parser, f"{base_name} - EPU", self.report,
+            flatten=self.flatten_sor,
         )
         if not success:
             return {"CANCELLED"}
 
         parser.parse_computo(xml_content)
         if parser.xml_computo_list:
-            build_cme_schedule(parser, f"{base_name} - CME", ep_ifc_map, self.report)
+            build_cme_schedule(
+                parser, f"{base_name} - CME", ep_ifc_map, self.report,
+                import_measurement_rows=self.import_measurement_rows,
+            )
 
         epu_count = sum(1 for r in parser.xml_rate_list if not r["is_parent"])
         cme_count = sum(1 for r in parser.xml_computo_list if not r["is_parent"])

@@ -27,6 +27,44 @@ def _ifc_str(s):
     return s or None
 
 
+_UNIT_TO_IFC_QUANTITY = {
+    # Area
+    "m2":  ("IfcQuantityArea",   "AreaValue"),
+    "mq":  ("IfcQuantityArea",   "AreaValue"),
+    "m²":  ("IfcQuantityArea",   "AreaValue"),
+    # Volume
+    "m3":  ("IfcQuantityVolume", "VolumeValue"),
+    "mc":  ("IfcQuantityVolume", "VolumeValue"),
+    "m³":  ("IfcQuantityVolume", "VolumeValue"),
+    # Length
+    "m":   ("IfcQuantityLength", "LengthValue"),
+    "ml":  ("IfcQuantityLength", "LengthValue"),
+    "lm":  ("IfcQuantityLength", "LengthValue"),
+    # Weight
+    "kg":  ("IfcQuantityWeight", "WeightValue"),
+    "t":   ("IfcQuantityWeight", "WeightValue"),
+    "ton": ("IfcQuantityWeight", "WeightValue"),
+    "q":   ("IfcQuantityWeight", "WeightValue"),
+    # Time
+    "h":       ("IfcQuantityTime",  "TimeValue"),
+    "ore":     ("IfcQuantityTime",  "TimeValue"),
+    # Count (explicit)
+    "n":       ("IfcQuantityCount", "CountValue"),
+    "n.":      ("IfcQuantityCount", "CountValue"),
+    "nr":      ("IfcQuantityCount", "CountValue"),
+    "nr.":     ("IfcQuantityCount", "CountValue"),
+    "cad":     ("IfcQuantityCount", "CountValue"),
+    "pz":      ("IfcQuantityCount", "CountValue"),
+    "corpo":   ("IfcQuantityCount", "CountValue"),
+    "a corpo": ("IfcQuantityCount", "CountValue"),
+}
+
+
+def _ifc_quantity_type(unit_str):
+    """Map an XPWE unit string to (IfcClass, value_attribute) for IfcCostItem.CostQuantities."""
+    return _UNIT_TO_IFC_QUANTITY.get(unit_str.lower().strip(), ("IfcQuantityCount", "CountValue"))
+
+
 def _refresh_ui(tool):
     """Refresh the cost schedule tree if one is active."""
     import bpy
@@ -129,7 +167,7 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
 # XPWE → IFC schedule builders
 # ---------------------------------------------------------------------------
 
-def build_schedule_from_xpwe(parser, schedule_name, report=None):
+def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
     """Create a new IfcCostSchedule (EPU/SoR) from parser.xml_rate_list.
 
     Returns (True, ep_ifc_map) on success, (False, {}) on failure.
@@ -158,10 +196,23 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None):
 
         index_to_ifc = {}
 
+        if flatten:
+            epu_root = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
+            tool.Ifc.run("cost.edit_cost_item", cost_item=epu_root, attributes={
+                "Identification": None,
+                "Name": "EPU",
+                "Description": None,
+            })
+
         for rate in parser.xml_rate_list:
             parent_indices = [int(p) for p in rate["parents"].split(",") if p.strip()]
 
-            if not parent_indices:
+            if flatten:
+                if rate["is_parent"]:
+                    index_to_ifc[rate["index"]] = epu_root
+                    continue
+                cost_item = tool.Ifc.run("cost.add_cost_item", cost_item=epu_root)
+            elif not parent_indices:
                 cost_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
             else:
                 cost_item = tool.Ifc.run("cost.add_cost_item",
@@ -221,7 +272,7 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None):
     return True, ep_ifc_map
 
 
-def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
+def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_measurement_rows=False):
     """Create an IfcCostSchedule (CME/BoQ) from parser.xml_computo_list.
 
     ep_ifc_map: {xml_ep_id: IfcCostItem} from build_schedule_from_xpwe.
@@ -268,10 +319,10 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
             })
 
             if rate["is_parent"]:
-                # SUM operator: Bonsai aggregates children automatically
-                cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
-                             attributes={"ArithmeticOperator": "ADD"})
+                # SUM: Bonsai's add_cost_value with cost_type="SUM" sets up
+                # the aggregation so chapter subtotals are visible in the UI
+                import bpy as _bpy
+                _bpy.ops.bim.add_cost_value(parent=cost_item.id(), cost_type="SUM")
             else:
                 ep_xml_id = rate.get("ep_xml_id", "")
                 cost_rate = ep_ifc_map.get(ep_xml_id)
@@ -288,12 +339,29 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None):
                     tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
                                  attributes={"AppliedValue": round(float(rate["value"]), 2)})
 
-                if quantity != 0.0:
-                    cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                    tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
-                        "Category": "Quantity",
-                        "AppliedValue": round(quantity, 4),
+                unit = rate.get("unit", "")
+                ifc_class, value_attr = _ifc_quantity_type(unit)
+                rg_items = rate.get("rg_items") or []
+                if import_measurement_rows and rg_items:
+                    new_qtys = []
+                    for rg in rg_items:
+                        if rg["qty"] == 0.0:
+                            continue
+                        kw = {
+                            "Name": rg["desc"] or "Qty",
+                            value_attr: round(rg["qty"], 4),
+                        }
+                        if rg.get("formula"):
+                            kw["Description"] = rg["formula"]
+                        new_qtys.append(file.create_entity(ifc_class, **kw))
+                    if new_qtys:
+                        cost_item.CostQuantities = list(cost_item.CostQuantities or []) + new_qtys
+                elif quantity != 0.0:
+                    qty = file.create_entity(ifc_class, **{
+                        "Name": rate.get("qty_name") or "Qty",
+                        value_attr: round(quantity, 4),
                     })
+                    cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty]
 
             index_to_ifc[rate["index"]] = cost_item
 
