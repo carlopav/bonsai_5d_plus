@@ -31,7 +31,8 @@
       "Read(//c/Users/cp/**)",
       "PowerShell(Remove-Item \"c:\\\\Users\\\\cp\\\\Documents\\\\bonsai_5d_plus\\\\src\\\\bonsai_5d_plus\\\\XpweImportExport.py\" -Confirm:$false)",
       "Bash(git checkout *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
