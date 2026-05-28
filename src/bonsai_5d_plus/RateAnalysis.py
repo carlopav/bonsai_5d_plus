@@ -32,6 +32,7 @@ except Exception:
 
 # Immutable tuple — Blender caches this; a list would be re-evaluated every redraw
 COMPONENT_CATEGORIES = (
+    ('NONE',         "—",            "No category (existing value, not a rate analysis component)"),
     ('SUB_CONTRACT', "Sub-Contract", "Subcontracted works (opere compiute)"),
     ('LABOR',        "Labor",        "Labor costs (manodopera)"),
     ('EQUIPMENT',    "Equipment",    "Equipment rental costs (noli)"),
@@ -180,11 +181,7 @@ def _parse_pct(name):
 
 
 def _remove_analysis_values(tool, cost_item):
-    to_remove = [
-        cv for cv in (cost_item.CostValues or [])
-        if (cv.Category or "") in _ALL_PA_CATEGORIES
-    ]
-    for cv in to_remove:
+    for cv in list(cost_item.CostValues or []):
         tool.Ifc.run("cost.remove_cost_value", parent=cost_item, cost_value=cv)
 
 
@@ -333,13 +330,9 @@ class RA_OT_ClearAll(bpy.types.Operator):
         wm = context.window_manager
         wm.rate_analysis_components.clear()
         wm.rate_analysis_active_index = 0
-        wm.rate_analysis_overhead_pct = 15.0
-        wm.rate_analysis_profit_pct = 10.0
+        wm.rate_analysis_overhead_pct = 0.0
+        wm.rate_analysis_profit_pct = 0.0
         wm.rate_analysis_rounding = 0.0
-        wm.rate_analysis_target_ifc_id = 0
-        wm.rate_analysis_item_identification = ""
-        wm.rate_analysis_item_name = ""
-        wm.rate_analysis_item_description = ""
         return {'FINISHED'}
 
 
@@ -450,15 +443,29 @@ def _write_cost_item_info(tool, cost_item, wm):
 
 
 class RA_OT_SyncItemInfo(*_IfcOperatorBase):
-    """Re-read Identification, Name and Description from the pinned target item."""
+    """Re-read Identification, Name and Description from the active (or pinned) cost item."""
     bl_idname = "rate_analysis.sync_item_info"
-    bl_label = "Refresh info from IFC"
+    bl_label = "Load identification from IFC"
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        if context.window_manager.rate_analysis_target_ifc_id != 0:
+            return True
+        try:
+            props = context.scene.BIMCostProperties
+            return props.active_cost_item is not None and props.active_cost_schedule_id != 0
+        except Exception:
+            return False
 
     def _execute(self, context):
+        wm = context.window_manager
+        if wm.rate_analysis_target_ifc_id == 0:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            cost_item = file.by_id(
+                context.scene.BIMCostProperties.active_cost_item.ifc_definition_id
+            )
+            wm.rate_analysis_target_ifc_id = cost_item.id()
         _read_cost_item_info(context)
 
 
@@ -520,7 +527,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
             tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
                 "Name": comp.description,
-                "Category": _TO_IFC[comp.category],
+                "Category": _TO_IFC.get(comp.category),
                 # AppliedValue = line total (qty × unit_price) so Bonsai sums correctly;
                 # UnitBasis keeps qty+unit for round-trip reconstruction on Load
                 "AppliedValue": line_total,
@@ -555,6 +562,153 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         tool.Cost.load_cost_schedule_tree()
 
 
+def _get_cost_schedule(cost_item):
+    """Return the IfcCostSchedule containing this cost item.
+    Mirrors ifcopenshell.util.cost.get_cost_schedule exactly."""
+    for rel in (cost_item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+            return rel.RelatingControl
+    for rel in (cost_item.Nests or []):
+        return _get_cost_schedule(rel.RelatingObject)
+    return None
+
+
+def _get_cost_item_controller(cost_item):
+    """Return the IfcCostItem that controls this one via IfcRelAssignsToControl, or None."""
+    for rel in (cost_item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl"):
+            ctrl = rel.RelatingControl
+            if ctrl.is_a("IfcCostItem"):
+                return ctrl
+    return None
+
+
+def _load_cost_item(context, item_id=None):
+    """Load rate analysis and identification from a cost item.
+    Uses the active cost item when item_id is None.
+    Returns True if analysis data was found, False otherwise."""
+    from bonsai import tool
+
+    file = tool.Ifc.get()
+    if item_id is None:
+        item_id = context.scene.BIMCostProperties.active_cost_item.ifc_definition_id
+    cost_item = file.by_id(item_id)
+    wm = context.window_manager
+
+    wm.rate_analysis_components.clear()
+    wm.rate_analysis_active_index = 0
+    wm.rate_analysis_overhead_pct = 0.0
+    wm.rate_analysis_profit_pct = 0.0
+    wm.rate_analysis_rounding = 0.0
+    wm.rate_analysis_target_ifc_id = cost_item.id()
+    _read_cost_item_info(context)
+
+    found = False
+
+    for cv in (cost_item.CostValues or []):
+        cat = cv.Category or ""
+
+        if cat in _LINE_CATEGORIES or cat not in _ALL_PA_CATEGORIES:
+            found = True
+            comp = wm.rate_analysis_components.add()
+            comp.category = _FROM_IFC.get(cat, 'NONE')
+            comp.description = cv.Name or ""
+
+            v = cv.AppliedValue
+            line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
+
+            qty, unit_str = _read_unit_basis(cv)
+            if qty is not None:
+                comp.qty = qty
+                comp.unit = unit_str or ""
+                comp.unit_price = round(line_total / qty, 6) if qty else line_total
+            else:
+                comp.unit_price = line_total
+
+            cond = getattr(cv, "Condition", None) or ""
+            if cond.startswith(_IFC_REF_PREFIX):
+                try:
+                    comp.source_ifc_id = int(cond[len(_IFC_REF_PREFIX):])
+                    src = file.by_id(comp.source_ifc_id)
+                    comp.source_identification = src.Identification or ""
+                except Exception:
+                    pass
+
+            if comp.source_ifc_id:
+                current = _get_rate_current_value(file, comp.source_ifc_id)
+                if current is not None and round(current, 2) != round(comp.unit_price, 2):
+                    comp.needs_rate_update = True
+
+        elif cat == _OVERHEAD_CAT:
+            found = True
+            pct = _parse_pct(cv.Name)
+            if pct is not None:
+                wm.rate_analysis_overhead_pct = pct
+
+        elif cat == _PROFIT_CAT:
+            found = True
+            pct = _parse_pct(cv.Name)
+            if pct is not None:
+                wm.rate_analysis_profit_pct = pct
+
+        elif cat == _ROUNDING_CAT:
+            found = True
+            v = cv.AppliedValue
+            if v is not None:
+                wm.rate_analysis_rounding = float(
+                    v.wrappedValue if hasattr(v, "wrappedValue") else v
+                )
+
+    return found
+
+
+@bpy.app.handlers.persistent
+def _auto_load_handler(scene, depsgraph):
+    try:
+        wm = bpy.context.window_manager
+        if not wm.rate_analysis_auto_load:
+            return
+        props = bpy.context.scene.BIMCostProperties
+        if props.active_cost_item is None or props.active_cost_schedule_id == 0:
+            return
+        item_id = props.active_cost_item.ifc_definition_id
+        if item_id == wm.rate_analysis_target_ifc_id:
+            return
+        _load_cost_item(bpy.context)
+    except Exception:
+        pass
+
+
+class RA_OT_LoadController(*_IfcOperatorBase):
+    """Load the cost item that controls the current one."""
+    bl_idname = "rate_analysis.load_controller"
+    bl_label = "Load Controlling Item"
+
+    @classmethod
+    def poll(cls, context):
+        wm = context.window_manager
+        if wm.rate_analysis_target_ifc_id == 0:
+            return False
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            if not file:
+                return False
+            cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+            return _get_cost_item_controller(cost_item) is not None
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        controller = _get_cost_item_controller(cost_item)
+        if controller:
+            _load_cost_item(context, item_id=controller.id())
+
+
 class RA_OT_LoadFromIfc(*_IfcOperatorBase):
     """Load rate analysis from the active IFC cost item."""
     bl_idname = "rate_analysis.load_from_ifc"
@@ -569,79 +723,7 @@ class RA_OT_LoadFromIfc(*_IfcOperatorBase):
             return False
 
     def _execute(self, context):
-        from bonsai import tool
-
-        file = tool.Ifc.get()
-        cost_item = file.by_id(context.scene.BIMCostProperties.active_cost_item.ifc_definition_id)
-        wm = context.window_manager
-
-        wm.rate_analysis_components.clear()
-        wm.rate_analysis_active_index = 0
-        wm.rate_analysis_overhead_pct = 15.0
-        wm.rate_analysis_profit_pct = 10.0
-        wm.rate_analysis_rounding = 0.0
-        wm.rate_analysis_target_ifc_id = cost_item.id()
-        _read_cost_item_info(context)
-
-        found = False
-
-        for cv in (cost_item.CostValues or []):
-            cat = cv.Category or ""
-
-            if cat in _LINE_CATEGORIES:
-                found = True
-                comp = wm.rate_analysis_components.add()
-                comp.category = _FROM_IFC.get(cat, 'LABOR')
-                comp.description = cv.Name or ""
-
-                # AppliedValue is the line total; unit_price = total / qty
-                v = cv.AppliedValue
-                line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
-
-                qty, unit_str = _read_unit_basis(cv)
-                if qty is not None:
-                    comp.qty = qty
-                    comp.unit = unit_str or ""
-                    comp.unit_price = round(line_total / qty, 6) if qty else line_total
-                else:
-                    comp.unit_price = line_total
-
-                cond = getattr(cv, "Condition", None) or ""
-                if cond.startswith(_IFC_REF_PREFIX):
-                    try:
-                        comp.source_ifc_id = int(cond[len(_IFC_REF_PREFIX):])
-                        src = file.by_id(comp.source_ifc_id)
-                        comp.source_identification = src.Identification or ""
-                    except Exception:
-                        pass
-
-                # Check if the linked rate value has changed since last Apply
-                if comp.source_ifc_id:
-                    current = _get_rate_current_value(file, comp.source_ifc_id)
-                    if current is not None and round(current, 2) != round(comp.unit_price, 2):
-                        comp.needs_rate_update = True
-
-            elif cat == _OVERHEAD_CAT:
-                found = True
-                pct = _parse_pct(cv.Name)
-                if pct is not None:
-                    wm.rate_analysis_overhead_pct = pct
-
-            elif cat == _PROFIT_CAT:
-                found = True
-                pct = _parse_pct(cv.Name)
-                if pct is not None:
-                    wm.rate_analysis_profit_pct = pct
-
-            elif cat == _ROUNDING_CAT:
-                found = True
-                v = cv.AppliedValue
-                if v is not None:
-                    wm.rate_analysis_rounding = float(
-                        v.wrappedValue if hasattr(v, "wrappedValue") else v
-                    )
-
-        if not found:
+        if not _load_cost_item(context):
             self.report({'WARNING'}, "No price analysis data found on this cost item.")
 
 
@@ -652,8 +734,10 @@ class RA_OT_LoadFromIfc(*_IfcOperatorBase):
 class RATE_UL_analysis(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row(align=False)
-        cat_tag = item.category[:3].upper() if item.category else "???"
-        row.label(text=f"[{cat_tag}]")
+        if item.category and item.category != 'NONE':
+            row.label(text=f"[{item.category[:3].upper()}]")
+        else:
+            row.label(text="     ")
         name_col = row.column()
         name_col.scale_x = 1.6
         if item.source_ifc_id:
@@ -675,9 +759,9 @@ class RATE_UL_analysis(bpy.types.UIList):
 # Panel
 # ---------------------------------------------------------------------------
 
-class RateAnalysisPanel(bpy.types.Panel):
-    bl_label = "Rate Analysis"
-    bl_idname = "SCENE_PT_rate_analysis"
+class CostItemEditorPanel(bpy.types.Panel):
+    bl_label = "Cost Item Editor"
+    bl_idname = "SCENE_PT_cost_item_editor"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
@@ -686,17 +770,49 @@ class RateAnalysisPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
+        row = layout.row(align=True)
+        row.scale_y = 1.3
+        row.operator("rate_analysis.load_from_ifc", text="Load Item Data", icon="FILE_REFRESH")
+        row.operator("rate_analysis.load_controller", text="", icon="DRIVER")
+        row.prop(wm, "rate_analysis_auto_load", text="", icon="LINKED", toggle=True)
 
-        # Cost item info header
-        box = layout.box()
-        row = box.row()
-        row.label(text="Cost Item", icon="OBJECT_DATA")
-        row.operator("rate_analysis.sync_item_info", text="", icon="FILE_REFRESH")
-        row.operator("rate_analysis.apply_item_info", text="", icon="CHECKMARK")
-        box.prop(wm, "rate_analysis_item_identification", text="ID")
-        box.prop(wm, "rate_analysis_item_name", text="Name")
+        if wm.rate_analysis_target_ifc_id:
+            sched_label = "Cost Schedule: —"
+            try:
+                from bonsai import tool
+                file = tool.Ifc.get()
+                if file:
+                    cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+                    schedule = _get_cost_schedule(cost_item)
+                    if schedule:
+                        name = schedule.Name or "—"
+                        ptype = (schedule.PredefinedType or "").replace("NOTDEFINED", "").replace("USERDEFINED", "")
+                        sched_label = f"Cost Schedule:  {name}  [{ptype}]" if ptype else f"Cost Schedule:  {name}"
+                    else:
+                        sched_label = "Cost Schedule: (not found)"
+                else:
+                    sched_label = "Cost Schedule: (no IFC file)"
+            except Exception as e:
+                sched_label = f"Cost Schedule: (error: {e})"
+            layout.label(text=sched_label, icon="SPREADSHEET")
 
-        desc_box = box.box()
+
+class CIE_PT_Identification(bpy.types.Panel):
+    bl_label = "Identification"
+    bl_idname = "SCENE_PT_cie_identification"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Bonsai5D+"
+    bl_parent_id = "SCENE_PT_cost_item_editor"
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+
+        layout.prop(wm, "rate_analysis_item_identification", text="ID")
+        layout.prop(wm, "rate_analysis_item_name", text="Name")
+
+        desc_box = layout.box()
         if not wm.rate_analysis_editing_description:
             row = desc_box.row()
             row.label(text="Description:", icon="TEXT")
@@ -719,7 +835,24 @@ class RateAnalysisPanel(bpy.types.Panel):
             row.operator("rate_analysis.apply_description", icon="CHECKMARK")
             row.operator("rate_analysis.cancel_description", icon="X")
 
-        layout.separator(factor=0.5)
+        layout.separator(factor=0.3)
+        row = layout.row(align=True)
+        row.operator("rate_analysis.sync_item_info", text="Load", icon="FILE_REFRESH")
+        row.operator("rate_analysis.apply_item_info", text="Apply Description", icon="CHECKMARK")
+
+
+class CIE_PT_RateAnalysis(bpy.types.Panel):
+    bl_label = "Rate Analysis"
+    bl_idname = "SCENE_PT_cie_rate_analysis"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Bonsai5D+"
+    bl_parent_id = "SCENE_PT_cost_item_editor"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
 
         # Toolbar
         row = layout.row(align=True)
@@ -730,9 +863,6 @@ class RateAnalysisPanel(bpy.types.Panel):
         row.operator("rate_analysis.move_down", text="", icon="TRIA_DOWN")
         row.separator()
         row.operator("rate_analysis.clear_all", text="", icon="TRASH")
-        row.separator()
-        row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
-        row.operator("rate_analysis.apply_to_ifc", text="Apply", icon="EXPORT")
 
         # Component list
         layout.template_list(
@@ -751,6 +881,7 @@ class RateAnalysisPanel(bpy.types.Panel):
             split = box.split(factor=0.25)
             split.label(text="Category:")
             row = split.row(align=True)
+            row.prop_enum(comp, "category", 'NONE',         icon="REMOVE")
             row.prop_enum(comp, "category", 'SUB_CONTRACT', icon="LINKED")
             row.prop_enum(comp, "category", 'LABOR',        icon="COMMUNITY")
             row.prop_enum(comp, "category", 'EQUIPMENT',    icon="AUTO")
@@ -771,7 +902,6 @@ class RateAnalysisPanel(bpy.types.Panel):
         ct, sg, profit, final = _get_totals(wm)
         box = layout.box()
 
-        # Per-category totals (only categories with at least one component)
         cat_totals = {}
         for c in wm.rate_analysis_components:
             cat_totals[c.category] = cat_totals.get(c.category, 0.0) + c.qty * c.unit_price
@@ -807,6 +937,12 @@ class RateAnalysisPanel(bpy.types.Panel):
         split.label(text="FINAL PRICE:", icon="FUND")
         split.label(text=f"{final:.2f}")
 
+        layout.separator(factor=0.3)
+        row = layout.row(align=True)
+        row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
+        row.operator("rate_analysis.apply_to_ifc", text="Apply Rate Analysis", icon="EXPORT")
+
+
 
 # ---------------------------------------------------------------------------
 # Registration
@@ -829,7 +965,10 @@ classes = [
     RA_OT_ApplyItemInfo,
     RA_OT_ApplyToIfc,
     RA_OT_LoadFromIfc,
-    RateAnalysisPanel,
+    RA_OT_LoadController,
+    CostItemEditorPanel,
+    CIE_PT_Identification,
+    CIE_PT_RateAnalysis,
 ]
 
 
@@ -874,9 +1013,18 @@ def register():
         name="Editing Description",
         default=False,
     )
+    bpy.types.WindowManager.rate_analysis_auto_load = bpy.props.BoolProperty(
+        name="Auto Load",
+        description="Automatically reload data when the active cost item changes",
+        default=False,
+    )
+    if _auto_load_handler not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_auto_load_handler)
 
 
 def unregister():
+    if _auto_load_handler in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(_auto_load_handler)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.WindowManager.rate_analysis_components
@@ -889,6 +1037,7 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_item_description
     del bpy.types.WindowManager.rate_analysis_target_ifc_id
     del bpy.types.WindowManager.rate_analysis_editing_description
+    del bpy.types.WindowManager.rate_analysis_auto_load
     _remove_description_text()
 
 
