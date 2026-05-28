@@ -40,6 +40,7 @@ from . import BulkUpdateCostSchedule
 from . import CostClassification
 from . import TenderComparison
 from . import SvgToPdf
+from . import ImportExport
 
 _MODULES = [
     RateListImporter,
@@ -49,6 +50,7 @@ _MODULES = [
     CostClassification,
     TenderComparison,
     SvgToPdf,
+    ImportExport,
 ]
 
 

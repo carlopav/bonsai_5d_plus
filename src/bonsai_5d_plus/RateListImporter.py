@@ -689,6 +689,11 @@ class ParserXmlLombardia(PriceListParser):
 class ParserXpwe(PriceListParser):
     """Parser per formato XPWE (Primus e compatibili)."""
 
+    def __init__(self):
+        super().__init__()
+        self.xml_computo_list = []   # populated by parse_computo()
+        self._ep_by_xml_id = {}      # EPItem XML-ID → rate dict (set by parse_items)
+
     @staticmethod
     def _text(elem, path, default=""):
         try:
@@ -718,7 +723,7 @@ class ParserXpwe(PriceListParser):
                 return
 
         self._parse_header(dati)
-        supercaps, caps = self._read_categories(dati)
+        supercaps, caps, subcaps = self._read_categories(dati)
 
         misurazioni = root.find("PweMisurazioni")
         if misurazioni is None:
@@ -733,8 +738,9 @@ class ParserXpwe(PriceListParser):
         ep_elements = ep_root.findall("EPItem")
 
         index = 0
-        spcap_to_index = {}  # SuperCapitolo ID → list index
-        cap_to_index = {}    # (id_spcap, id_cap) → list index
+        spcap_to_index = {}   # SuperCapitolo ID → list index
+        cap_to_index = {}     # (id_spcap, id_cap) → list index
+        sbcap_to_index = {}   # (id_spcap, id_cap, id_sbcap) → list index
 
         for ep in ep_elements:
             if not ep.get("ID"):
@@ -756,6 +762,7 @@ class ParserXpwe(PriceListParser):
 
             id_spcap = self._text(ep, "IDSpCap")
             id_cap = self._text(ep, "IDCap")
+            id_sbcap = self._text(ep, "IDSbCap")
 
             # create SuperCapitolo on first encounter
             if id_spcap and id_spcap not in spcap_to_index:
@@ -784,14 +791,35 @@ class ParserXpwe(PriceListParser):
                 cap_to_index[cap_key] = index
                 index += 1
 
+            # create SubCapitolo on first encounter (when IDSbCap is present)
+            sbcap_key = (id_spcap, id_cap, id_sbcap)
+            if id_sbcap and sbcap_key not in sbcap_to_index:
+                sbcap = subcaps.get(id_sbcap, {})
+                sb_parents_parts = []
+                if id_spcap in spcap_to_index:
+                    sb_parents_parts.append(str(spcap_to_index[id_spcap]))
+                if cap_key in cap_to_index:
+                    sb_parents_parts.append(str(cap_to_index[cap_key]))
+                self.xml_rate_list.append({
+                    "index": index, "level": len(sb_parents_parts),
+                    "is_parent": True, "parents": ",".join(sb_parents_parts),
+                    "id": sbcap.get("codice", ""), "name": sbcap.get("desc", ""),
+                    "desc": "", "unit": "", "value": 0.0,
+                    "labor": 0.0, "equipment": 0.0, "materials": 0.0, "safety": 0.0,
+                })
+                sbcap_to_index[sbcap_key] = index
+                index += 1
+
             # build parents list for EPItem
             parents_parts = []
             if id_spcap in spcap_to_index:
                 parents_parts.append(str(spcap_to_index[id_spcap]))
             if cap_key in cap_to_index:
                 parents_parts.append(str(cap_to_index[cap_key]))
+            if sbcap_key in sbcap_to_index:
+                parents_parts.append(str(sbcap_to_index[sbcap_key]))
 
-            self.xml_rate_list.append({
+            ep_entry = {
                 "index": index,
                 "level": len(parents_parts),
                 "is_parent": False,
@@ -805,7 +833,12 @@ class ParserXpwe(PriceListParser):
                 "equipment": incidenza("IncATTR"),
                 "materials": incidenza("IncMAT"),
                 "safety": incidenza("IncSIC"),
-            })
+            }
+            self.xml_rate_list.append(ep_entry)
+            # also index by XML ID for parse_computo lookup
+            xml_id = ep.get("ID")
+            if xml_id:
+                self._ep_by_xml_id[xml_id] = ep_entry
             index += 1
 
     def _parse_header(self, dati):
@@ -822,10 +855,11 @@ class ParserXpwe(PriceListParser):
     def _read_categories(dati):
         supercaps = {}
         caps = {}
+        subcaps = {}
         try:
             cap_cat = dati.find("PweDGCapitoliCategorie")
             if cap_cat is None:
-                return supercaps, caps
+                return supercaps, caps, subcaps
 
             sc_found = cap_cat.find("PweDGSuperCapitoli")
             if sc_found is not None:
@@ -833,8 +867,8 @@ class ParserXpwe(PriceListParser):
                     sc_id = elem.get("ID")
                     if sc_id:
                         supercaps[sc_id] = {
-                            "codice": ParserXpwe._text(elem, "Codice"),
-                            "desc": ParserXpwe._text(elem, "DesSintetica"),
+                            "codice": ParserXpwe._text(elem, "Codice").strip(),
+                            "desc": ParserXpwe._text(elem, "DesSintetica").strip(),
                         }
 
             cap_found = cap_cat.find("PweDGCapitoli")
@@ -842,16 +876,173 @@ class ParserXpwe(PriceListParser):
                 for elem in cap_found:
                     cap_id = elem.get("ID")
                     if cap_id:
-                        desc = ParserXpwe._text(elem, "DesSintetica")
+                        desc = ParserXpwe._text(elem, "DesSintetica").strip()
                         if desc == "Nuova voce":
-                            desc = ParserXpwe._text(elem, "DesEstesa")
+                            desc = ParserXpwe._text(elem, "DesEstesa").strip()
                         caps[cap_id] = {
-                            "codice": ParserXpwe._text(elem, "Codice"),
+                            "codice": ParserXpwe._text(elem, "Codice").strip(),
+                            "desc": desc,
+                        }
+
+            sbcap_found = cap_cat.find("PweDGSubCapitoli")
+            if sbcap_found is not None:
+                for elem in sbcap_found:
+                    sb_id = elem.get("ID")
+                    if sb_id:
+                        desc = ParserXpwe._text(elem, "DesSintetica").strip()
+                        if desc == "Nuova voce":
+                            desc = ParserXpwe._text(elem, "DesEstesa").strip()
+                        subcaps[sb_id] = {
+                            "codice": ParserXpwe._text(elem, "Codice").strip(),
                             "desc": desc,
                         }
         except Exception:
             pass
-        return supercaps, caps
+        return supercaps, caps, subcaps
+
+    @staticmethod
+    def _read_categories_computo(dati):
+        """Read SuperCategorie/Categorie/SubCategorie (used by VCItems in computo)."""
+        supercats = {}
+        cats = {}
+        subcats = {}
+        try:
+            cap_cat = dati.find("PweDGCapitoliCategorie")
+            if cap_cat is None:
+                return supercats, cats, subcats
+
+            for xml_tag, dest in [
+                ("PweDGSuperCategorie", supercats),
+                ("PweDGCategorie", cats),
+                ("PweDGSubCategorie", subcats),
+            ]:
+                section = cap_cat.find(xml_tag)
+                if section is not None:
+                    for elem in section:
+                        eid = elem.get("ID")
+                        if eid:
+                            desc = ParserXpwe._text(elem, "DesSintetica").strip()
+                            dest[eid] = {
+                                "codice": ParserXpwe._text(elem, "Codice").strip(),
+                                "desc": desc,
+                            }
+        except Exception:
+            pass
+        return supercats, cats, subcats
+
+    def parse_computo(self, xml_content):
+        """Parse PweVociComputo into xml_computo_list, organized by Categorie."""
+        xml_content = self.clean_xml_content(xml_content)
+        root = self.get_root(xml_content)
+
+        dati = root.find("PweDatiGenerali")
+        if dati is None:
+            try:
+                dati = list(root)[0].find("PweDatiGenerali")
+            except Exception:
+                return
+
+        supercats, cats, subcats = self._read_categories_computo(dati)
+
+        misurazioni = root.find("PweMisurazioni")
+        if misurazioni is None:
+            try:
+                misurazioni = list(root)[0].find("PweMisurazioni")
+            except Exception:
+                return
+        if misurazioni is None:
+            return
+
+        vc_root = misurazioni.find("PweVociComputo")
+        if vc_root is None or len(list(vc_root)) == 0:
+            return
+
+        index = 0
+        spcat_to_index = {}   # IDSpCat → list index
+        cat_to_index = {}     # (IDSpCat, IDCat) → list index
+        sbcat_to_index = {}   # (IDSpCat, IDCat, IDSbCat) → list index
+
+        def _parent_entry(codice, desc):
+            return {"desc": "", "unit": "", "value": 0.0,
+                    "labor": 0.0, "equipment": 0.0, "materials": 0.0, "safety": 0.0,
+                    "id": codice, "name": desc, "quantity": 0.0}
+
+        for vc in vc_root.findall("VCItem"):
+            if not vc.get("ID"):
+                continue
+
+            id_ep = self._text(vc, "IDEP")
+            quantita = self._float(self._text(vc, "Quantita"))
+            id_spcat = self._text(vc, "IDSpCat")
+            id_cat = self._text(vc, "IDCat")
+            id_sbcat = self._text(vc, "IDSbCat")
+
+            ep = self._ep_by_xml_id.get(id_ep, {})
+
+            # SuperCategoria
+            if id_spcat and id_spcat not in spcat_to_index:
+                sc = supercats.get(id_spcat, {})
+                e = _parent_entry(sc.get("codice", ""), sc.get("desc", ""))
+                e.update({"index": index, "level": 0, "is_parent": True, "parents": ""})
+                self.xml_computo_list.append(e)
+                spcat_to_index[id_spcat] = index
+                index += 1
+
+            # Categoria
+            cat_key = (id_spcat, id_cat)
+            if id_cat and cat_key not in cat_to_index:
+                cat = cats.get(id_cat, {})
+                sp_p = str(spcat_to_index[id_spcat]) if id_spcat in spcat_to_index else ""
+                e = _parent_entry(cat.get("codice", ""), cat.get("desc", ""))
+                e.update({"index": index, "level": 1 if sp_p else 0,
+                          "is_parent": True, "parents": sp_p})
+                self.xml_computo_list.append(e)
+                cat_to_index[cat_key] = index
+                index += 1
+
+            # SubCategoria
+            sbcat_key = (id_spcat, id_cat, id_sbcat)
+            if id_sbcat and sbcat_key not in sbcat_to_index:
+                sbcat = subcats.get(id_sbcat, {})
+                sb_pp = []
+                if id_spcat in spcat_to_index:
+                    sb_pp.append(str(spcat_to_index[id_spcat]))
+                if cat_key in cat_to_index:
+                    sb_pp.append(str(cat_to_index[cat_key]))
+                e = _parent_entry(sbcat.get("codice", ""), sbcat.get("desc", ""))
+                e.update({"index": index, "level": len(sb_pp),
+                          "is_parent": True, "parents": ",".join(sb_pp)})
+                self.xml_computo_list.append(e)
+                sbcat_to_index[sbcat_key] = index
+                index += 1
+
+            # VCItem leaf
+            pp = []
+            if id_spcat in spcat_to_index:
+                pp.append(str(spcat_to_index[id_spcat]))
+            if cat_key in cat_to_index:
+                pp.append(str(cat_to_index[cat_key]))
+            if sbcat_key in sbcat_to_index:
+                pp.append(str(sbcat_to_index[sbcat_key]))
+
+            self.xml_computo_list.append({
+                "index": index,
+                "level": len(pp),
+                "is_parent": False,
+                "parents": ",".join(pp),
+                "ep_xml_id": id_ep,       # IDEP → lookup key into _ep_by_xml_id
+                "id": ep.get("id", ""),
+                "name": ep.get("name", ""),
+                "desc": ep.get("desc", ""),
+                "unit": ep.get("unit", ""),
+                "value": ep.get("value", 0.0),
+                "quantity": quantita,
+                "labor": ep.get("labor", 0.0),
+                "equipment": ep.get("equipment", 0.0),
+                "materials": ep.get("materials", 0.0),
+                "safety": ep.get("safety", 0.0),
+            })
+            index += 1
 
 
 class ParserXmlSix(PriceListParser):
