@@ -352,7 +352,7 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                             value_attr: round(rg["qty"], 4),
                         }
                         if rg.get("formula"):
-                            kw["Description"] = rg["formula"]
+                            kw["Formula"] = rg["formula"]
                         new_qtys.append(file.create_entity(ifc_class, **kw))
                     if new_qtys:
                         cost_item.CostQuantities = list(cost_item.CostQuantities or []) + new_qtys
