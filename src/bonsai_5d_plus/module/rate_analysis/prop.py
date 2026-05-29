@@ -37,7 +37,17 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
     )
 
 
-classes = [RateAnalysisComponent]
+class MeasureRow(bpy.types.PropertyGroup):
+    """Single row of a libretto-delle-misure measurement table."""
+    qty_desc: bpy.props.StringProperty(name="Description", options={'SKIP_SAVE'})
+    qty_nr: bpy.props.FloatProperty(name="NR", precision=3, options={'SKIP_SAVE'})
+    qty_l: bpy.props.FloatProperty(name="L", precision=3, options={'SKIP_SAVE'})
+    qty_b: bpy.props.FloatProperty(name="B", precision=3, options={'SKIP_SAVE'})
+    qty_h: bpy.props.FloatProperty(name="H", precision=3, options={'SKIP_SAVE'})
+    ifc_id: bpy.props.IntProperty(name="IFC ID", default=0, options={'SKIP_SAVE'})
+
+
+classes = [RateAnalysisComponent, MeasureRow]
 
 
 def register():
@@ -83,6 +93,20 @@ def register():
         description="Automatically reload data when the active cost item changes",
         default=False,
     )
+    bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
+    bpy.types.WindowManager.cost_quantities_active_index = bpy.props.IntProperty(default=0)
+    bpy.types.WindowManager.cost_quantities_type = bpy.props.EnumProperty(
+        name="Quantity Type",
+        items=[
+            ('AREA',   "Area",   "Surface area (m²)"),
+            ('VOLUME', "Volume", "Volume (m³)"),
+            ('LENGTH', "Length", "Length (m)"),
+            ('COUNT',  "Count",  "Count (number of items)"),
+            ('WEIGHT', "Weight", "Weight (kg)"),
+            ('TIME',   "Time",   "Time (h)"),
+        ],
+        default='COUNT',
+    )
 
 
 def unregister():
@@ -97,3 +121,6 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_target_ifc_id
     del bpy.types.WindowManager.rate_analysis_editing_description
     del bpy.types.WindowManager.rate_analysis_auto_load
+    del bpy.types.WindowManager.cost_quantities
+    del bpy.types.WindowManager.cost_quantities_active_index
+    del bpy.types.WindowManager.cost_quantities_type

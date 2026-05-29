@@ -38,13 +38,47 @@ _FROM_IFC = {v: k for k, v in _TO_IFC.items()}
 _CATEGORY_WRITE_ORDER = ['SUB_CONTRACT', 'LABOR', 'EQUIPMENT', 'MATERIAL', 'SAFETY']
 
 _LINE_CATEGORIES = set(_TO_IFC.values())
+
+# ---------------------------------------------------------------------------
+# Quantity (libretto delle misure) constants
+# ---------------------------------------------------------------------------
+
+_QTY_TYPES = (
+    ('AREA',   "Area",   "IfcQuantityArea",   "AreaValue",   "m²"),
+    ('VOLUME', "Volume", "IfcQuantityVolume",  "VolumeValue", "m³"),
+    ('LENGTH', "Length", "IfcQuantityLength",  "LengthValue", "m"),
+    ('COUNT',  "Count",  "IfcQuantityCount",   "CountValue",  ""),
+    ('WEIGHT', "Weight", "IfcQuantityWeight",  "WeightValue", "kg"),
+    ('TIME',   "Time",   "IfcQuantityTime",    "TimeValue",   "h"),
+)
+_QTY_IFC_CLASS  = {t[0]: t[2] for t in _QTY_TYPES}
+_QTY_VALUE_ATTR = {t[0]: t[3] for t in _QTY_TYPES}
+_QTY_UNIT_ABBR  = {t[0]: t[4] for t in _QTY_TYPES}
+# reverse: IfcClassName → type_id
+_QTY_FROM_IFC   = {t[2]: t[0] for t in _QTY_TYPES}
 _OVERHEAD_CAT = "Overhead"
 _PROFIT_CAT = "Profit"
 _ROUNDING_CAT = "Rounding"
 _ALL_PA_CATEGORIES = _LINE_CATEGORIES | {_OVERHEAD_CAT, _PROFIT_CAT, _ROUNDING_CAT}
 
-_IFC_REF_PREFIX = "#ifc:"
+_IFC_REF_RE = re.compile(r"#ifc:(\d+)")
 _DESCRIPTION_TEXT_NAME = "Bonsai5D+_Description"
+
+
+def _build_cv_ref(source_ifc_id, source_identification):
+    """Build a human-readable Description for a CostValue that references a source item."""
+    ident = source_identification or f"#{source_ifc_id}"
+    return f"ref:[{ident}](#ifc:{source_ifc_id})"
+
+
+def _parse_cv_source_id(cv):
+    """Return source IFC step-ID from Description (new format) or Condition (legacy), or None."""
+    for field in ("Description", "Condition"):
+        val = getattr(cv, field, None) or ""
+        m = _IFC_REF_RE.search(val)
+        if m:
+            return int(m.group(1))
+    return None
 
 # ---------------------------------------------------------------------------
 # Text editor helpers
@@ -209,6 +243,85 @@ def _write_cost_item_info(tool, cost_item, wm):
     })
 
 
+def _compute_partial_qty(nr, l, b, h):
+    """Product of non-zero fields; returns 0 if all fields are zero."""
+    result = 1.0
+    used = False
+    for v in (nr, l, b, h):
+        if v != 0.0:
+            result *= v
+            used = True
+    return result if used else 0.0
+
+
+def _build_formula_qty(nr, l, b, h):
+    """Build 'NR × L × B × H' string from non-zero fields."""
+    parts = []
+    for v in (nr, l, b, h):
+        if v != 0.0:
+            parts.append(f"{v:g}")
+    return " × ".join(parts)
+
+
+def _parse_formula_qty(formula_str):
+    """Parse 'NR × L × B × H' → (nr, l, b, h); missing/unparseable fields → 0.0."""
+    if not formula_str:
+        return 0.0, 0.0, 0.0, 0.0
+    parts = [p.strip() for p in formula_str.split("×") if p.strip()]
+    vals = []
+    for p in parts[:4]:
+        try:
+            vals.append(float(p.replace(",", ".")))
+        except ValueError:
+            vals.append(0.0)
+    while len(vals) < 4:
+        vals.append(0.0)
+    return vals[0], vals[1], vals[2], vals[3]
+
+
+def _load_quantities(context, cost_item=None):
+    """Populate cost_quantities collection from cost_item.CostQuantities."""
+    wm = context.window_manager
+    wm.cost_quantities.clear()
+    wm.cost_quantities_active_index = 0
+    if cost_item is None:
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            target_id = wm.rate_analysis_target_ifc_id
+            if target_id:
+                cost_item = file.by_id(target_id)
+            else:
+                cost_item = file.by_id(
+                    context.scene.BIMCostProperties.active_cost_item.ifc_definition_id
+                )
+        except Exception:
+            return
+    type_detected = False
+    for q in (cost_item.CostQuantities or []):
+        row = wm.cost_quantities.add()
+        row.qty_desc = q.Name or ""
+        row.ifc_id = q.id()
+        ifc_type = q.is_a()
+        type_id = _QTY_FROM_IFC.get(ifc_type, 'COUNT')
+        if not type_detected:
+            wm.cost_quantities_type = type_id
+            type_detected = True
+        val_attr = _QTY_VALUE_ATTR.get(type_id, "CountValue")
+        stored_value = float(getattr(q, val_attr, 0.0) or 0.0)
+        # Formula is the correct IFC4 attribute; fall back to Description for files
+        # imported before this fix (XPWE importer used to write formula to Description)
+        formula = getattr(q, "Formula", None) or q.Description or ""
+        nr, l, b, h = _parse_formula_qty(formula)
+        # Validate: recomputed partial must match stored value (within tolerance)
+        recomputed = _compute_partial_qty(nr, l, b, h)
+        if formula and abs(recomputed - stored_value) < max(abs(stored_value) * 0.001, 0.0001):
+            row.qty_nr, row.qty_l, row.qty_b, row.qty_h = nr, l, b, h
+        else:
+            # Formula unreadable — put stored value in NR, leave others at 0
+            row.qty_nr = stored_value
+
+
 def _load_cost_item(context, item_id=None):
     from bonsai import tool
 
@@ -248,12 +361,11 @@ def _load_cost_item(context, item_id=None):
             else:
                 comp.unit_price = line_total
 
-            cond = getattr(cv, "Condition", None) or ""
-            if cond.startswith(_IFC_REF_PREFIX):
+            src_id = _parse_cv_source_id(cv)
+            if src_id is not None:
                 try:
-                    comp.source_ifc_id = int(cond[len(_IFC_REF_PREFIX):])
-                    src = file.by_id(comp.source_ifc_id)
-                    comp.source_identification = src.Identification or ""
+                    comp.source_ifc_id = src_id
+                    comp.source_identification = file.by_id(src_id).Identification or ""
                 except Exception:
                     pass
 
@@ -282,6 +394,7 @@ def _load_cost_item(context, item_id=None):
                     v.wrappedValue if hasattr(v, "wrappedValue") else v
                 )
 
+    _load_quantities(context, cost_item)
     return found
 
 
@@ -584,7 +697,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
             })
             _set_unit_basis(file, cv, comp.qty, comp.unit)
             if comp.source_ifc_id:
-                cv.Condition = f"{_IFC_REF_PREFIX}{comp.source_ifc_id}"
+                cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
 
         cv_sg = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
         tool.Ifc.run("cost.edit_cost_value", cost_value=cv_sg, attributes={
@@ -660,6 +773,142 @@ class RA_OT_LoadController(*_IfcOperatorBase):
             _load_cost_item(context, item_id=controller.id())
 
 
+class QTY_OT_AddRow(bpy.types.Operator):
+    bl_idname = "cost_quantities.add_row"
+    bl_label = "Add Measurement Row"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        row = wm.cost_quantities.add()
+        row.qty_nr = 1.0
+        wm.cost_quantities_active_index = len(wm.cost_quantities) - 1
+        return {'FINISHED'}
+
+
+class QTY_OT_RemoveRow(bpy.types.Operator):
+    bl_idname = "cost_quantities.remove_row"
+    bl_label = "Remove Measurement Row"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = wm.cost_quantities
+        idx = wm.cost_quantities_active_index
+        if 0 <= idx < len(items):
+            items.remove(idx)
+            wm.cost_quantities_active_index = max(0, idx - 1)
+        return {'FINISHED'}
+
+
+class QTY_OT_MoveRowUp(bpy.types.Operator):
+    bl_idname = "cost_quantities.move_row_up"
+    bl_label = "Move Row Up"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = wm.cost_quantities
+        idx = wm.cost_quantities_active_index
+        if idx > 0:
+            items.move(idx, idx - 1)
+            wm.cost_quantities_active_index = idx - 1
+        return {'FINISHED'}
+
+
+class QTY_OT_MoveRowDown(bpy.types.Operator):
+    bl_idname = "cost_quantities.move_row_down"
+    bl_label = "Move Row Down"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = wm.cost_quantities
+        idx = wm.cost_quantities_active_index
+        if idx < len(items) - 1:
+            items.move(idx, idx + 1)
+            wm.cost_quantities_active_index = idx + 1
+        return {'FINISHED'}
+
+
+class QTY_OT_InsertRowAfter(bpy.types.Operator):
+    bl_idname = "cost_quantities.insert_row_after"
+    bl_label = "Insert Row Below"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    index: bpy.props.IntProperty(options={'SKIP_SAVE'})
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = wm.cost_quantities
+        items.add().qty_nr = 1.0
+        new_idx = len(items) - 1
+        target = self.index + 1
+        if target < new_idx:
+            items.move(new_idx, target)
+        wm.cost_quantities_active_index = target
+        return {'FINISHED'}
+
+
+class QTY_OT_Load(*_IfcOperatorBase):
+    """Load quantities from the pinned IFC cost item."""
+    bl_idname = "cost_quantities.load"
+    bl_label = "Load Quantities from IFC"
+
+    @classmethod
+    def poll(cls, context):
+        wm = context.window_manager
+        if wm.rate_analysis_target_ifc_id != 0:
+            return True
+        try:
+            props = context.scene.BIMCostProperties
+            return props.active_cost_item is not None and props.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        _load_quantities(context)
+
+
+class QTY_OT_Apply(*_IfcOperatorBase):
+    """Write measurement rows to the pinned IFC cost item as CostQuantities."""
+    bl_idname = "cost_quantities.apply"
+    bl_label = "Apply Quantities to IFC"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.window_manager.rate_analysis_target_ifc_id != 0
+
+    def _execute(self, context):
+        from bonsai import tool
+        import bonsai.bim.module.cost.data
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+
+        for q in list(cost_item.CostQuantities or []):
+            file.remove(q)
+
+        ifc_class = _QTY_IFC_CLASS[wm.cost_quantities_type]
+        val_attr = _QTY_VALUE_ATTR[wm.cost_quantities_type]
+        new_quantities = []
+        for row in wm.cost_quantities:
+            partial = _compute_partial_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
+            kw = {
+                "Name": row.qty_desc or None,
+                val_attr: round(partial, 6),
+            }
+            formula = _build_formula_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
+            if formula:
+                kw["Formula"] = formula
+            new_quantities.append(file.create_entity(ifc_class, **kw))
+
+        cost_item.CostQuantities = new_quantities
+        bonsai.bim.module.cost.data.refresh()
+        tool.Cost.load_cost_schedule_tree()
+
+
 classes = [
     RA_OT_AddComponent,
     RA_OT_AddFromRate,
@@ -676,4 +925,11 @@ classes = [
     RA_OT_ApplyToIfc,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,
+    QTY_OT_AddRow,
+    QTY_OT_RemoveRow,
+    QTY_OT_MoveRowUp,
+    QTY_OT_MoveRowDown,
+    QTY_OT_InsertRowAfter,
+    QTY_OT_Load,
+    QTY_OT_Apply,
 ]

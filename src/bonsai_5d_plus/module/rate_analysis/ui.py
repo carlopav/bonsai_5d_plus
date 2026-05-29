@@ -11,6 +11,8 @@ from .operator import (
     _get_totals,
     _get_cost_schedule,
     _DESCRIPTION_TEXT_NAME,
+    _QTY_UNIT_ABBR,
+    _compute_partial_qty,
 )
 
 
@@ -185,27 +187,29 @@ class CIE_PT_RateAnalysis(bpy.types.Panel):
             if total:
                 split = box.split(factor=0.6)
                 split.label(text=f"{cat_label}:")
-                split.label(text=f"{total:.2f}")
+                r = split.row()
+                r.alignment = 'RIGHT'
+                r.label(text=f"{total:.2f}")
 
         box.separator(factor=0.3)
         split = box.split(factor=0.6)
         split.label(text="Technical Cost:")
-        split.label(text=f"{ct:.2f}")
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{ct:.2f}")
         box.separator(factor=0.3)
         split = box.split(factor=0.6)
         split.prop(wm, "rate_analysis_overhead_pct", text="Overhead %")
-        split.label(text=f"{sg:.2f}")
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{sg:.2f}")
         split = box.split(factor=0.6)
         split.prop(wm, "rate_analysis_profit_pct", text="Profit %")
-        split.label(text=f"{profit:.2f}")
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{profit:.2f}")
         split = box.split(factor=0.6)
         split.prop(wm, "rate_analysis_rounding", text="Rounding")
         split.label(text="")
 
         box2 = layout.box()
         split = box2.split(factor=0.6)
-        split.label(text="FINAL PRICE:", icon="FUND")
-        split.label(text=f"{final:.2f}")
+        split.label(text="FINAL PRICE:", icon="DISC")
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{final:.2f}")
 
         layout.separator(factor=0.3)
         row = layout.row(align=True)
@@ -213,4 +217,89 @@ class CIE_PT_RateAnalysis(bpy.types.Panel):
         row.operator("rate_analysis.apply_to_ifc", text="Apply Rate Analysis", icon="EXPORT")
 
 
-classes = [RATE_UL_analysis, CostItemEditorPanel, CIE_PT_Identification, CIE_PT_RateAnalysis]
+class MEAS_UL_rows(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+
+        # Selection zone: clicking here selects the row without triggering text edit
+        col = row.column()
+        col.scale_x = 0.12
+        col.label(text="")
+
+        col = row.column()
+        col.scale_x = 2.0
+        col.prop(item, "qty_desc", text="", emboss=True)
+
+        for field in ("qty_nr", "qty_l", "qty_b", "qty_h"):
+            col = row.column()
+            col.scale_x = 0.6
+            col.prop(item, field, text="")
+
+        partial = _compute_partial_qty(item.qty_nr, item.qty_l, item.qty_b, item.qty_h)
+        col = row.column()
+        col.scale_x = 0.7
+        col.label(text=f"{partial:g}")
+
+        op = row.operator("cost_quantities.insert_row_after", text="", icon="ADD", emboss=False)
+        op.index = index
+
+
+class CIE_PT_Quantities(bpy.types.Panel):
+    bl_label = "Quantities"
+    bl_idname = "SCENE_PT_cie_quantities"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Bonsai5D+"
+    bl_parent_id = "SCENE_PT_cost_item_editor"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+
+        row = layout.row(align=True)
+        row.prop(wm, "cost_quantities_type", text="")
+        row.separator()
+        row.operator("cost_quantities.add_row",    text="", icon="ADD")
+        row.operator("cost_quantities.remove_row", text="", icon="REMOVE")
+        row.operator("cost_quantities.move_row_up",   text="", icon="TRIA_UP")
+        row.operator("cost_quantities.move_row_down", text="", icon="TRIA_DOWN")
+
+        # Column headers — mirrors UIList column proportions
+        hdr = layout.row(align=True)
+        hdr.scale_y = 0.6
+        col = hdr.column(); col.scale_x = 0.12; col.label(text="")
+        col = hdr.column(); col.scale_x = 2.0;  col.label(text="Descrizione")
+        for lbl in ("NR", "L", "B", "H"):
+            col = hdr.column(); col.scale_x = 0.6; col.label(text=lbl)
+        col = hdr.column(); col.scale_x = 0.7;  col.label(text="Parziale")
+        col = hdr.column(); col.scale_x = 0.25; col.label(text="")
+
+        layout.template_list(
+            "MEAS_UL_rows", "",
+            wm, "cost_quantities",
+            wm, "cost_quantities_active_index",
+            rows=5,
+        )
+
+        # Total row — "Totale:" centred, value aligned with "Parziale" column
+        # Split factor ≈ (spacer+desc+4cols) / total_scale_units: 0.12+2.0+2.4 / 5.47 ≈ 0.83
+        total = sum(
+            _compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h)
+            for r in wm.cost_quantities
+        )
+        unit = _QTY_UNIT_ABBR.get(wm.cost_quantities_type, "")
+        total_row = layout.split(factor=0.83)
+        lbl_col = total_row.row()
+        lbl_col.alignment = 'CENTER'
+        lbl_col.label(text="Totale:", icon="PROPERTIES")
+        val_col = total_row.row()
+        val_col.label(text=f"{total:g} {unit}".strip())
+
+        layout.separator(factor=0.3)
+        row = layout.row(align=True)
+        row.operator("cost_quantities.load",  text="Load",             icon="FILE_REFRESH")
+        row.operator("cost_quantities.apply", text="Apply Quantities", icon="EXPORT")
+
+
+classes = [RATE_UL_analysis, MEAS_UL_rows, CostItemEditorPanel, CIE_PT_Identification, CIE_PT_RateAnalysis, CIE_PT_Quantities]
