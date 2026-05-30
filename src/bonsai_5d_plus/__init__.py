@@ -40,6 +40,7 @@ from .module import (
     tender,
     svg_to_pdf,
     import_export,
+    reorder_schedule,
 )
 
 _MODULES = [
@@ -51,6 +52,7 @@ _MODULES = [
     import_export,
     boq_to_sor,   # Sandbox (must be last so panel appears at bottom of sidebar)
     bulk_update,
+    reorder_schedule,
 ]
 
 
