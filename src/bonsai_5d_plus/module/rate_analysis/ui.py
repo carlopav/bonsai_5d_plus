@@ -3,7 +3,6 @@
 #
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
-import textwrap
 import bpy
 
 from .operator import (
@@ -93,25 +92,17 @@ class CIE_PT_Identification(bpy.types.Panel):
         layout.prop(wm, "rate_analysis_item_identification", text="ID")
         layout.prop(wm, "rate_analysis_item_name", text="Name")
 
-        desc_box = layout.box()
         if not wm.rate_analysis_editing_description:
-            row = desc_box.row()
-            row.label(text="Description:", icon="TEXT")
+            row = layout.row(align=True)
+            row.prop(wm, "rate_analysis_item_description", text="Description")
             row.operator("rate_analysis.edit_description", text="", icon="GREASEPENCIL")
-            if wm.rate_analysis_item_description:
-                col = desc_box.column(align=True)
-                col.scale_y = 0.7
-                for paragraph in wm.rate_analysis_item_description.split("\n"):
-                    for line in textwrap.wrap(paragraph, 60) or [" "]:
-                        col.label(text=line)
-            else:
-                desc_box.label(text="(empty)", icon="INFO")
         else:
-            col = desc_box.column()
+            box = layout.box()
+            col = box.column()
             col.label(text="Editing description…", icon="GREASEPENCIL")
             col.label(text=f"Edit '{_DESCRIPTION_TEXT_NAME}' in Text Editor,")
             col.label(text="then:")
-            row = desc_box.row(align=True)
+            row = box.row(align=True)
             row.scale_y = 1.4
             row.operator("rate_analysis.apply_description", icon="CHECKMARK")
             row.operator("rate_analysis.cancel_description", icon="X")
