@@ -43,14 +43,14 @@ from .module import (
 )
 
 _MODULES = [
-    rate_list,
     rate_analysis,
-    boq_to_sor,
-    bulk_update,
+    rate_list,
     classification,
     tender,
     svg_to_pdf,
     import_export,
+    boq_to_sor,   # Sandbox (must be last so panel appears at bottom of sidebar)
+    bulk_update,
 ]
 
 

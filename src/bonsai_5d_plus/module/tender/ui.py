@@ -30,7 +30,7 @@ class TENDER_UL_PriceItems(bpy.types.UIList):
 
 
 class TenderComparisonPanel(bpy.types.Panel):
-    bl_label = "Tender"
+    bl_label = "Tenders Manager"
     bl_idname = "SCENE_PT_tender_comparison"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"

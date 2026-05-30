@@ -13,6 +13,7 @@ class BulkUpdatePanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
+    bl_parent_id = "SCENE_PT_bonsai5d_sandbox"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):

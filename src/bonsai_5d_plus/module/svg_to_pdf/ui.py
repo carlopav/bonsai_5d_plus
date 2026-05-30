@@ -8,7 +8,7 @@ from .operator import ExportSheetsToPdfOperator, _get_ifc
 
 
 class SvgToPdfPanel(bpy.types.Panel):
-    bl_label = "Print to PDF"
+    bl_label = "Prints Manager"
     bl_idname = "SCENE_PT_svg_to_pdf"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"

@@ -45,8 +45,6 @@ class CostItemEditorPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
-    bl_options = {"DEFAULT_CLOSED"}
-
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
