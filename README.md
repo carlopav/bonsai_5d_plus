@@ -23,12 +23,14 @@ Formati supportati:
 
 Le voci del prezzario possono essere assegnate alle voci di computo (`IfcCostItem`) con un clic, creando un nuovo item o aggiornando quello attivo, con ripartizione automatica delle componenti (manodopera, noli, materiali, sicurezza).
 
-### Rate Analysis
-Costruisce l'**analisi del prezzo** per una singola voce di computo, scomponendo il costo unitario nelle componenti elementari (Sub-Contract, Labor, Equipment, Material, Safety), applicando percentuali di spese generali e utile d'impresa e calcolando il prezzo finale arrotondato.
+### Cost Item Editor
+Pannello centrale per editare una voce di computo `IfcCostItem` direttamente dalla sidebar. È composto da tre sub-panel:
 
-I dati vengono scritti nel file IFC come `IfcCostValue` con categoria e struttura round-trip: è possibile riaprire un'analisi salvata, modificarla e riscriverla. I riferimenti alle tariffe sorgente vengono tracciati tramite l'ID IFC, con segnalazione automatica se il valore della tariffa è cambiato dall'ultima applicazione.
+**Identification** — Identification, Name e Description su singola riga con tooltip che mostra il testo completo. La Description supporta testi lunghi tramite il **Text Editor** integrato di Blender, aperto in una **finestra flottante** separata (la 3D View non viene mai sostituita).
 
-La voce può essere editata nei campi Identification, Name e Description direttamente dal pannello. La Description supporta testi lunghi tramite il **Text Editor** integrato di Blender (word wrap attivo), con anteprima multiriga nel pannello.
+**Rate Analysis** — Costruisce l'**analisi del prezzo** scomponendo il costo unitario nelle componenti elementari (Sub-Contract, Labor, Equipment, Material, Safety), applicando percentuali di spese generali e utile d'impresa e calcolando il prezzo finale arrotondato. I dati vengono scritti nel file IFC come `IfcCostValue` con categoria e struttura round-trip. I riferimenti alle tariffe sorgente vengono tracciati con segnalazione automatica se il valore è cambiato.
+
+**Quantities (libretto delle misure)** — Lettura e modifica di `IfcCostItem.CostQuantities` tramite un libretto delle misure interattivo. Ogni riga ha campi **NR × L × B × H** con parziale calcolato in tempo reale e totale complessivo a fondo pannello. Il tipo di quantità (Area, Volume, Lunghezza, Conteggio, Peso, Tempo) determina il sottotipo `IfcQuantity` scritto nel file. La formula viene salvata nell'attributo `Formula` (IFC4) con round-trip completo.
 
 ### BoQ → Schedule of Rates
 Estrae le voci foglia di un **Bill of Quantities** (`IfcCostSchedule` di tipo `PRICEDBILLOFQUANTITIES` o `UNPRICEDBILLOFQUANTITIES`) e le trasferisce in uno **Schedule of Rates**, creandolo ex novo oppure aggiornando uno esistente.
@@ -56,14 +58,20 @@ I sistemi di classificazione vengono caricati automaticamente all'avvio leggendo
 
 ## Installazione
 
+### Da GitHub Releases
+Scaricare il file `bonsai_5d_plus-X.Y.Z.zip` dalla [pagina Releases](https://github.com/carlopav/bonsai_5d_plus/releases) e installarlo da Blender tramite *Edit > Preferences > Add-ons > Install from disk*.
+
+### Build da sorgente
+```
+python tools/build_release.py
+```
+Produce `dist/bonsai_5d_plus-X.Y.Z.zip` con la struttura corretta per Blender. La versione viene letta automaticamente da `__init__.py`.
+
 ### Per lo sviluppo (symlink)
 ```
-mklink /J "%APPDATA%\Blender Foundation\Blender\<versione>\scripts\addons\bonsai_5d_plus" "<percorso_repo>\src"
+mklink /J "%APPDATA%\Blender Foundation\Blender\<versione>\scripts\addons\bonsai_5d_plus" "<percorso_repo>\src\bonsai_5d_plus"
 ```
 Abilitare l'addon in *Edit > Preferences > Add-ons* cercando **Bonsai5D+**.
-
-### Release
-Zippare il contenuto della cartella `src/` (non la cartella stessa). Il file `.zip` può essere installato direttamente da Blender tramite *Edit > Preferences > Add-ons > Install*.
 
 ### Rigenerare i file di classificazione
 I file IFC in `src/data/classifications/` sono già inclusi nel repository. Per rigenerarli (ad esempio dopo aver modificato le categorie):
@@ -83,7 +91,7 @@ blender.exe --background --python tools/generate_classifications.py
 
 ## Licenza
 
-Da definire.
+[GPL-3.0](LICENSE) — Copyright (C) 2026 Carlo Pavan.
 
 ---
 
@@ -95,7 +103,10 @@ Da definire.
 
 - **Rate List Importer** — imports Italian regional price lists (XML/XPWE formats: Veneto, Lombardia, Toscana, Liguria, Basilicata, SIX, XPWE/Primus) and exposes them as a browsable list in Blender's sidebar. Items can be assigned to cost items in one click.
 
-- **Rate Analysis** — builds a unit price breakdown for a single cost item, splitting the cost into components (Sub-Contract, Labor, Equipment, Material, Safety) and applying overhead and profit percentages. Data is written to IFC as `IfcCostValue` entries with full round-trip support. Long descriptions are edited via Blender's built-in Text Editor with word wrap.
+- **Cost Item Editor** — three-panel editor for a single `IfcCostItem`:
+  - *Identification*: single-line ID / Name / Description fields; full description visible in tooltip; long descriptions edited in a dedicated floating Text Editor window.
+  - *Rate Analysis*: unit price breakdown into components (Sub-Contract, Labor, Equipment, Material, Safety) with overhead and profit percentages. Written to IFC as `IfcCostValue` with full round-trip support and automatic stale-rate detection.
+  - *Quantities (measurement book)*: interactive libretto-delle-misure table for `IfcCostItem.CostQuantities`. Each row has NR × L × B × H fields with live partial computation and a running total. Writes one `IfcQuantityXxx` per row using the IFC4 `Formula` attribute for the expression.
 
 - **BoQ → Schedule of Rates** — extracts leaf items from a Bill of Quantities and transfers them to a Schedule of Rates (new or existing), with automatic deduplication, conflict detection, and an interactive per-item diff resolver.
 
