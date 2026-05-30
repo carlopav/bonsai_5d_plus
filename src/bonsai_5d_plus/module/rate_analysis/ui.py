@@ -104,8 +104,8 @@ class CIE_PT_Identification(bpy.types.Panel):
             col.label(text="then:")
             row = box.row(align=True)
             row.scale_y = 1.4
-            row.operator("rate_analysis.apply_description", icon="CHECKMARK")
             row.operator("rate_analysis.cancel_description", icon="X")
+            row.operator("rate_analysis.apply_description", icon="CHECKMARK")
 
         layout.separator(factor=0.3)
         row = layout.row(align=True)

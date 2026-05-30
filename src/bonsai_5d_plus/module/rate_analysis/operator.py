@@ -85,23 +85,33 @@ def _parse_cv_source_id(cv):
 # ---------------------------------------------------------------------------
 
 def _open_text_editor(context, text):
-    for area in context.screen.areas:
-        if area.type == 'TEXT_EDITOR':
-            area.spaces.active.text = text
-            area.spaces.active.show_word_wrap = True
-            return
-    area_target = max(
-        (a for a in context.screen.areas if a.type not in ('PROPERTIES', 'TEXT_EDITOR')),
-        key=lambda a: a.width * a.height,
-        default=None,
-    )
-    if area_target:
-        area_target.type = 'TEXT_EDITOR'
-        area_target.spaces.active.text = text
-        area_target.spaces.active.show_word_wrap = True
+    # Reuse any existing text editor in any open window
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'TEXT_EDITOR':
+                area.spaces.active.text = text
+                area.spaces.active.show_word_wrap = True
+                return
+    # Open a new floating window and convert its largest area
+    bpy.ops.wm.window_new()
+    new_win = context.window_manager.windows[-1]
+    target = max(new_win.screen.areas, key=lambda a: a.width * a.height, default=None)
+    if target:
+        target.type = 'TEXT_EDITOR'
+        target.spaces.active.text = text
+        target.spaces.active.show_word_wrap = True
 
 
 def _close_text_editor(context):
+    # Close a dedicated floating window that contains the text editor
+    for window in list(context.window_manager.windows):
+        if window == context.window:
+            continue
+        if any(a.type == 'TEXT_EDITOR' for a in window.screen.areas):
+            with context.temp_override(window=window):
+                bpy.ops.wm.window_close()
+            return
+    # Fallback: revert embedded text editor area back to 3D Viewport
     for area in context.screen.areas:
         if area.type == 'TEXT_EDITOR':
             area.type = 'VIEW_3D'
