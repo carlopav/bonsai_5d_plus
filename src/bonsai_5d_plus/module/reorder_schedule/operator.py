@@ -3,7 +3,10 @@
 #
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
+import re
 import bpy
+
+_NUMERIC_ID_RE = re.compile(r"^\d+(\.\d+)*$")
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -39,15 +42,20 @@ def _assign_identifications(tool, items, parent_prefix=""):
 
 def _assign_identifications_skip_root_summary(tool, items, parent_prefix="", is_root=True):
     """Like _assign_identifications but root-level summary items keep their
-    existing identification. Their counter position is still used as prefix
-    for their children so the child numbering remains coherent."""
+    existing identification. The prefix used for their children is:
+    - the existing identification, if it is already numeric (e.g. "1", "2.3")
+    - otherwise the positional counter (i)."""
     for i, item in enumerate(items, start=1):
         ident = str(i) if not parent_prefix else f"{parent_prefix}.{i}"
-        if not (is_root and _is_summary(item)):
+        if is_root and _is_summary(item):
+            existing = (item.Identification or "").strip()
+            child_prefix = existing if _NUMERIC_ID_RE.match(existing) else str(i)
+        else:
             tool.Ifc.run("cost.edit_cost_item", cost_item=item, attributes={"Identification": ident})
+            child_prefix = ident
         children = _get_children(item)
         if children:
-            _assign_identifications_skip_root_summary(tool, children, parent_prefix=ident, is_root=False)
+            _assign_identifications_skip_root_summary(tool, children, parent_prefix=child_prefix, is_root=False)
 
 
 class RS_OT_ReorderIdentifications(*_IfcOperatorBase):
