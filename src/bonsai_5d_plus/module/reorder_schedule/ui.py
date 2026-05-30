@@ -17,10 +17,9 @@ class ReorderSchedulePanel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        layout.operator(
-            "reorder_schedule.reorder_identifications",
-            icon="SORTALPHA",
-        )
+        row = layout.row(align=True)
+        row.operator("reorder_schedule.reorder_identifications",        text="Reorder All",          icon="SORTALPHA")
+        row.operator("reorder_schedule.reorder_keep_root_summary",      text="Keep Root Summaries",  icon="OUTLINER")
 
 
 classes = [ReorderSchedulePanel]
