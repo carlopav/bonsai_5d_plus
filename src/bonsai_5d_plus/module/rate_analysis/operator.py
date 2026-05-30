@@ -735,6 +735,170 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         tool.Cost.load_cost_schedule_tree()
 
 
+def _find_parent_and_index(file, props):
+    """Return (parent_cost_item_or_None, active_index_in_parent_or_None)."""
+    try:
+        active_id = props.active_cost_item.ifc_definition_id
+        if not active_id:
+            return None, None
+        active = file.by_id(active_id)
+        for rel in (active.Nests or []):
+            obj = rel.RelatingObject
+            if obj.is_a("IfcCostItem"):
+                for r in (obj.IsNestedBy or []):
+                    siblings = list(r.RelatedObjects)
+                    if active in siblings:
+                        return obj, siblings.index(active)
+                return obj, None
+    except Exception:
+        pass
+    return None, None
+
+
+def _reorder_after_add(parent_item, new_item, insert_index):
+    """Move new_item to insert_index within its parent's RelatedObjects list."""
+    if parent_item is None or insert_index is None:
+        return
+    for r in (parent_item.IsNestedBy or []):
+        siblings = list(r.RelatedObjects)
+        if new_item in siblings:
+            siblings.remove(new_item)
+            siblings.insert(max(0, insert_index), new_item)
+            r.RelatedObjects = siblings
+            return
+
+
+def _select_and_load(context, ifc_id):
+    """Select new item in Bonsai's cost tree and load it in the editor."""
+    try:
+        props = context.scene.BIMCostProperties
+        for i, item in enumerate(props.cost_items):
+            if getattr(item, 'ifc_definition_id', None) == ifc_id:
+                props.active_cost_item_index = i
+                break
+    except Exception:
+        pass
+    _load_cost_item(context, ifc_id)
+
+
+class RA_OT_AddSummaryCost(*_IfcOperatorBase):
+    bl_idname = "rate_analysis.add_summary_cost"
+    bl_label = "Add Summary Cost"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def description(cls, context, properties):
+        return (
+            "Add a summary cost item (Category='*', sums child values) "
+            "at the same level as the active one. "
+            "If no item is active, adds at the root of the schedule."
+        )
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+        import bonsai.bim.module.cost.data
+
+        file = tool.Ifc.get()
+        props = context.scene.BIMCostProperties
+        schedule = file.by_id(int(props.active_cost_schedule_id))
+
+        # Find where to insert: sibling of active item, or root if none active
+        parent_item = None
+        try:
+            active_id = props.active_cost_item.ifc_definition_id
+            if active_id:
+                active = file.by_id(active_id)
+                for rel in (active.Nests or []):
+                    obj = rel.RelatingObject
+                    if obj.is_a("IfcCostItem"):
+                        parent_item = obj
+                    break
+        except Exception:
+            pass
+
+        if parent_item:
+            new_item = tool.Ifc.run("cost.add_cost_item", cost_item=parent_item)
+        else:
+            new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
+
+        cv = tool.Ifc.run("cost.add_cost_value", parent=new_item)
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={"Category": "*"})
+
+        bonsai.bim.module.cost.data.refresh()
+        tool.Cost.load_cost_schedule_tree()
+        _select_and_load(context, new_item.id())
+
+
+class RA_OT_AddCostItem(*_IfcOperatorBase):
+    """Add a plain cost item relative to the active one."""
+    bl_idname = "rate_analysis.add_cost_item"
+    bl_label = "Add Cost Item"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    position: bpy.props.EnumProperty(
+        items=[
+            ('BEFORE', "Before",         "Insert a new cost item before the active one (same level)"),
+            ('AFTER',  "After",          "Insert a new cost item after the active one (same level)"),
+            ('CHILD',  "As child",       "Insert a new cost item as a child of the active one"),
+        ],
+        default='AFTER',
+        options={'SKIP_SAVE'},
+    )
+
+    @classmethod
+    def description(cls, context, properties):
+        return {
+            'BEFORE': "Insert a new cost item before the active one (same level)",
+            'AFTER':  "Insert a new cost item after the active one (same level)",
+            'CHILD':  "Insert a new cost item as a child of the active one",
+        }.get(properties.position, "Add cost item")
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+        import bonsai.bim.module.cost.data
+
+        file = tool.Ifc.get()
+        props = context.scene.BIMCostProperties
+        schedule = file.by_id(int(props.active_cost_schedule_id))
+
+        if self.position == 'CHILD':
+            try:
+                active_id = props.active_cost_item.ifc_definition_id
+                active = file.by_id(active_id) if active_id else None
+            except Exception:
+                active = None
+            if active:
+                new_item = tool.Ifc.run("cost.add_cost_item", cost_item=active)
+            else:
+                new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
+        else:
+            parent_item, active_index = _find_parent_and_index(file, props)
+            if parent_item:
+                new_item = tool.Ifc.run("cost.add_cost_item", cost_item=parent_item)
+                insert_index = active_index if self.position == 'BEFORE' else active_index + 1
+                _reorder_after_add(parent_item, new_item, insert_index)
+            else:
+                new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
+
+        bonsai.bim.module.cost.data.refresh()
+        tool.Cost.load_cost_schedule_tree()
+        _select_and_load(context, new_item.id())
+
+
 class RA_OT_LoadFromIfc(*_IfcOperatorBase):
     """Load rate analysis from the active IFC cost item."""
     bl_idname = "rate_analysis.load_from_ifc"
@@ -933,6 +1097,8 @@ classes = [
     RA_OT_SyncItemInfo,
     RA_OT_ApplyItemInfo,
     RA_OT_ApplyToIfc,
+    RA_OT_AddSummaryCost,
+    RA_OT_AddCostItem,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,
     QTY_OT_AddRow,

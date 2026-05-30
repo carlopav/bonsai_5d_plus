@@ -48,6 +48,18 @@ class CostItemEditorPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
+
+        row = layout.row(align=True)
+        row.operator("rate_analysis.add_summary_cost", icon="ADD")
+        row.separator()
+        op = row.operator("rate_analysis.add_cost_item", text="", icon="TRIA_UP")
+        op.position = 'BEFORE'
+        op = row.operator("rate_analysis.add_cost_item", text="", icon="TRIA_DOWN")
+        op.position = 'AFTER'
+        op = row.operator("rate_analysis.add_cost_item", text="", icon="TRIA_RIGHT")
+        op.position = 'CHILD'
+
+        layout.separator(factor=0.5)
         row = layout.row(align=True)
         row.scale_y = 1.3
         row.operator("rate_analysis.load_from_ifc", text="Load Item Data", icon="FILE_REFRESH")
