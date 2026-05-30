@@ -6,3 +6,9 @@ __pycache__/
 
 # Claude Code local settings
 .claude/
+
+# Build output
+dist/
+
+# Stale zip in src/
+src/*.zip
