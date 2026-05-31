@@ -29,26 +29,36 @@ def _ifc_str(s):
 
 _UNIT_TO_IFC_QUANTITY = {
     # Area
-    "m2":  ("IfcQuantityArea",   "AreaValue"),
-    "mq":  ("IfcQuantityArea",   "AreaValue"),
-    "m²":  ("IfcQuantityArea",   "AreaValue"),
+    "m2":    ("IfcQuantityArea",   "AreaValue"),
+    "mq":    ("IfcQuantityArea",   "AreaValue"),
+    "m²":    ("IfcQuantityArea",   "AreaValue"),
+    "mq/cm": ("IfcQuantityArea",   "AreaValue"),   # surface × thickness layer; area is the input
     # Volume
-    "m3":  ("IfcQuantityVolume", "VolumeValue"),
-    "mc":  ("IfcQuantityVolume", "VolumeValue"),
-    "m³":  ("IfcQuantityVolume", "VolumeValue"),
+    "m3":    ("IfcQuantityVolume", "VolumeValue"),
+    "mc":    ("IfcQuantityVolume", "VolumeValue"),
+    "m³":    ("IfcQuantityVolume", "VolumeValue"),
+    "l":     ("IfcQuantityVolume", "VolumeValue"),   # litri
+    "dmc":   ("IfcQuantityVolume", "VolumeValue"),   # dm³
+    "cmc":   ("IfcQuantityVolume", "VolumeValue"),   # cm³
     # Length
-    "m":   ("IfcQuantityLength", "LengthValue"),
-    "ml":  ("IfcQuantityLength", "LengthValue"),
-    "lm":  ("IfcQuantityLength", "LengthValue"),
+    "m":     ("IfcQuantityLength", "LengthValue"),
+    "ml":    ("IfcQuantityLength", "LengthValue"),
+    "lm":    ("IfcQuantityLength", "LengthValue"),
+    "cm":    ("IfcQuantityLength", "LengthValue"),
+    "dm":    ("IfcQuantityLength", "LengthValue"),
+    "km":    ("IfcQuantityLength", "LengthValue"),
     # Weight
-    "kg":  ("IfcQuantityWeight", "WeightValue"),
-    "t":   ("IfcQuantityWeight", "WeightValue"),
-    "ton": ("IfcQuantityWeight", "WeightValue"),
-    "q":   ("IfcQuantityWeight", "WeightValue"),
+    "kg":    ("IfcQuantityWeight", "WeightValue"),
+    "t":     ("IfcQuantityWeight", "WeightValue"),
+    "ton":   ("IfcQuantityWeight", "WeightValue"),
+    "q":     ("IfcQuantityWeight", "WeightValue"),
+    "100 kg":("IfcQuantityWeight", "WeightValue"),
     # Time
-    "h":       ("IfcQuantityTime",  "TimeValue"),
-    "ore":     ("IfcQuantityTime",  "TimeValue"),
-    # Count (explicit)
+    "h":     ("IfcQuantityTime",   "TimeValue"),
+    "ore":   ("IfcQuantityTime",   "TimeValue"),
+    "ora":   ("IfcQuantityTime",   "TimeValue"),
+    "min":   ("IfcQuantityTime",   "TimeValue"),
+    # Count — dimensionless or non-mappable units
     "n":       ("IfcQuantityCount", "CountValue"),
     "n.":      ("IfcQuantityCount", "CountValue"),
     "nr":      ("IfcQuantityCount", "CountValue"),
@@ -57,6 +67,10 @@ _UNIT_TO_IFC_QUANTITY = {
     "pz":      ("IfcQuantityCount", "CountValue"),
     "corpo":   ("IfcQuantityCount", "CountValue"),
     "a corpo": ("IfcQuantityCount", "CountValue"),
+    "paio":    ("IfcQuantityCount", "CountValue"),
+    "coppia":  ("IfcQuantityCount", "CountValue"),
+    "kw":      ("IfcQuantityCount", "CountValue"),   # power — no IfcPhysicalSimpleQuantity subtype in IFC4
+    "kn":      ("IfcQuantityCount", "CountValue"),   # force — no IfcPhysicalSimpleQuantity subtype in IFC4
 }
 
 
@@ -65,13 +79,54 @@ def _ifc_quantity_type(unit_str):
     return _UNIT_TO_IFC_QUANTITY.get(unit_str.lower().strip(), ("IfcQuantityCount", "CountValue"))
 
 
-def _refresh_ui(tool):
-    """Refresh the cost schedule tree if one is active."""
+# Canonical quantity type info — single source of truth shared across modules.
+# Keys are the Blender enum identifiers used in prop.py.
+QTY_TYPE_INFO = {
+    'AREA':   {'label': "Area",   'ifc_class': "IfcQuantityArea",   'value_attr': "AreaValue",    'abbr': "m²"},
+    'VOLUME': {'label': "Volume", 'ifc_class': "IfcQuantityVolume",  'value_attr': "VolumeValue",  'abbr': "m³"},
+    'LENGTH': {'label': "Length", 'ifc_class': "IfcQuantityLength",  'value_attr': "LengthValue",  'abbr': "m"},
+    'COUNT':  {'label': "Count",  'ifc_class': "IfcQuantityCount",   'value_attr': "CountValue",   'abbr': ""},
+    'WEIGHT': {'label': "Weight", 'ifc_class': "IfcQuantityWeight",  'value_attr': "WeightValue",  'abbr': "kg"},
+    'TIME':   {'label': "Time",   'ifc_class': "IfcQuantityTime",    'value_attr': "TimeValue",    'abbr': "h"},
+    # IFC4X3 only — generic numeric value (not a discrete count)
+    'NUMBER': {'label': "Number", 'ifc_class': "IfcQuantityNumber",  'value_attr': "NumberValue",  'abbr': ""},
+}
+# Reverse: IfcClassName → type_id
+QTY_FROM_IFC_CLASS = {info['ifc_class']: k for k, info in QTY_TYPE_INFO.items()}
+
+
+def refresh_cost_ui(tool):
+    """Refresh the Bonsai cost schedule tree. Call after any IFC cost modification."""
     import bpy
     import bonsai.bim.module.cost.data
     bonsai.bim.module.cost.data.refresh()
     if bpy.context.scene.BIMCostProperties.active_cost_schedule_id != 0:
         tool.Cost.load_cost_schedule_tree()
+
+
+# Internal alias kept for backward compat with calls inside this file.
+_refresh_ui = refresh_cost_ui
+
+
+def get_cost_item_children(item):
+    """Return direct IfcCostItem children of item via IsNestedBy."""
+    return [
+        obj
+        for rel in (item.IsNestedBy or [])
+        for obj in (rel.RelatedObjects or [])
+        if obj.is_a("IfcCostItem")
+    ]
+
+
+def is_summary_cost_item(item):
+    """True if item has a SUM cost value (Category='*')."""
+    return any(getattr(cv, "Category", None) == "*" for cv in (item.CostValues or []))
+
+
+def remove_all_cost_values(tool, item):
+    """Remove all direct CostValues from item using the Bonsai undo-safe API."""
+    for cv in list(item.CostValues or []):
+        tool.Ifc.run("cost.remove_cost_value", parent=item, cost_value=cv)
 
 
 # ---------------------------------------------------------------------------

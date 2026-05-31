@@ -7,6 +7,13 @@ import re
 import time as _time
 import bpy
 
+from ...tool.cost import (
+    QTY_TYPE_INFO,
+    QTY_FROM_IFC_CLASS,
+    refresh_cost_ui,
+    get_cost_item_children,
+)
+
 try:
     from bonsai import tool as _bonsai_tool
     _IfcOperatorBase = (_bonsai_tool.Ifc.Operator, bpy.types.Operator)
@@ -40,22 +47,14 @@ _CATEGORY_WRITE_ORDER = ['SUB_CONTRACT', 'LABOR', 'EQUIPMENT', 'MATERIAL', 'SAFE
 _LINE_CATEGORIES = set(_TO_IFC.values())
 
 # ---------------------------------------------------------------------------
-# Quantity (libretto delle misure) constants
+# Quantity (libretto delle misure) — derived from tool.cost.QTY_TYPE_INFO
 # ---------------------------------------------------------------------------
 
-_QTY_TYPES = (
-    ('AREA',   "Area",   "IfcQuantityArea",   "AreaValue",   "m²"),
-    ('VOLUME', "Volume", "IfcQuantityVolume",  "VolumeValue", "m³"),
-    ('LENGTH', "Length", "IfcQuantityLength",  "LengthValue", "m"),
-    ('COUNT',  "Count",  "IfcQuantityCount",   "CountValue",  ""),
-    ('WEIGHT', "Weight", "IfcQuantityWeight",  "WeightValue", "kg"),
-    ('TIME',   "Time",   "IfcQuantityTime",    "TimeValue",   "h"),
-)
-_QTY_IFC_CLASS  = {t[0]: t[2] for t in _QTY_TYPES}
-_QTY_VALUE_ATTR = {t[0]: t[3] for t in _QTY_TYPES}
-_QTY_UNIT_ABBR  = {t[0]: t[4] for t in _QTY_TYPES}
-# reverse: IfcClassName → type_id
-_QTY_FROM_IFC   = {t[2]: t[0] for t in _QTY_TYPES}
+_QTY_IFC_CLASS  = {k: v['ifc_class']  for k, v in QTY_TYPE_INFO.items()}
+_QTY_VALUE_ATTR = {k: v['value_attr'] for k, v in QTY_TYPE_INFO.items()}
+_QTY_UNIT_ABBR  = {k: v['abbr']       for k, v in QTY_TYPE_INFO.items()}
+_QTY_FROM_IFC   = QTY_FROM_IFC_CLASS
+
 _OVERHEAD_CAT = "Overhead"
 _PROFIT_CAT = "Profit"
 _ROUNDING_CAT = "Rounding"
@@ -149,10 +148,96 @@ def _get_totals(wm):
     return ct, sg, profit, ct + sg + profit + wm.rate_analysis_rounding
 
 
-def _get_or_create_unit_entity(file, unit_str):
-    for u in file.by_type("IfcContextDependentUnit"):
-        if (u.Name or "") == unit_str:
+# unit string → (UnitType, SIName, Prefix|None)  — reuse existing IfcSIUnit
+_UNIT_TO_SI_DESCRIPTOR = {
+    "mq": ("AREAUNIT",   "SQUARE_METRE", None),
+    "m2": ("AREAUNIT",   "SQUARE_METRE", None),
+    "m²": ("AREAUNIT",   "SQUARE_METRE", None),
+    "mc": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m3": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m³": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m":  ("LENGTHUNIT", "METRE",        None),
+    "ml": ("LENGTHUNIT", "METRE",        None),
+    "lm": ("LENGTHUNIT", "METRE",        None),
+    "km": ("LENGTHUNIT", "METRE",        "KILO"),
+    "dm": ("LENGTHUNIT", "METRE",        "DECI"),
+    "cm": ("LENGTHUNIT", "METRE",        "CENTI"),
+    "kg": ("MASSUNIT",   "GRAM",         "KILO"),
+    "t":  ("MASSUNIT",   "GRAM",         "MEGA"),    # metric tonne = megagram
+}
+
+# unit string → (UnitType, canonical_name, factor, SI_base_UnitType, SI_base_Name, SI_base_Prefix)
+# Used to create IfcConversionBasedUnit when not already present.
+_UNIT_TO_CONVERSION_DESCRIPTOR = {
+    "h":   ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "ore": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "ora": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "min": ("TIMEUNIT", "MINUTE",   60.0, "TIMEUNIT", "SECOND", None),
+}
+
+
+def _find_si_unit(file, unit_type, si_name, prefix):
+    for u in file.by_type("IfcSIUnit"):
+        if u.UnitType == unit_type and u.Name == si_name and (u.Prefix or None) == prefix:
             return u
+    return None
+
+
+def _get_or_create_unit_entity(file, unit_str):
+    """Return an IFC unit entity for unit_str, reusing project units where possible.
+
+    Lookup order:
+    1. IfcSIUnit in the file matching the descriptor (e.g. SQUARE_METRE for 'mq')
+    2. IfcConversionBasedUnit — reuse existing or create with correct factor (e.g. HOUR)
+    3. IfcConversionBasedUnit / IfcContextDependentUnit already in file with same name
+    4. Create a new IfcContextDependentUnit as last resort
+    """
+    key = unit_str.lower().strip()
+
+    # 1. Match an existing IfcSIUnit (covers m, mq, mc, cm, km, kg, t, …)
+    si_desc = _UNIT_TO_SI_DESCRIPTOR.get(key)
+    if si_desc:
+        found = _find_si_unit(file, *si_desc)
+        if found:
+            return found
+
+    # 2. Match or create an IfcConversionBasedUnit (covers h, ore, ora, min)
+    conv_desc = _UNIT_TO_CONVERSION_DESCRIPTOR.get(key)
+    if conv_desc:
+        unit_type, name, factor, base_type, base_name, base_prefix = conv_desc
+        # Reuse if already present (match by UnitType + canonical name)
+        for u in file.by_type("IfcConversionBasedUnit"):
+            if u.UnitType == unit_type and (u.Name or "").upper() == name:
+                return u
+        # Create it
+        base_si = _find_si_unit(file, base_type, base_name, base_prefix)
+        if base_si:
+            dims = file.create_entity(
+                "IfcDimensionalExponents",
+                LengthExponent=0, MassExponent=0, TimeExponent=1,
+                ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
+                AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
+            )
+            conversion_factor = file.create_entity(
+                "IfcMeasureWithUnit",
+                ValueComponent=file.create_entity("IfcNumericMeasure", factor),
+                UnitComponent=base_si,
+            )
+            return file.create_entity(
+                "IfcConversionBasedUnit",
+                Dimensions=dims,
+                UnitType=unit_type,
+                Name=name,
+                ConversionFactor=conversion_factor,
+            )
+
+    # 3. Reuse any existing named unit
+    for ifc_class in ("IfcConversionBasedUnit", "IfcContextDependentUnit"):
+        for u in file.by_type(ifc_class):
+            if (u.Name or "").lower().strip() == key:
+                return u
+
+    # 4. Last resort: create a context-dependent unit
     dims = file.create_entity(
         "IfcDimensionalExponents",
         LengthExponent=0, MassExponent=0, TimeExponent=0,
@@ -172,9 +257,13 @@ def _set_unit_basis(file, cv, qty, unit_str):
         return False
     try:
         unit_entity = _get_or_create_unit_entity(file, unit_str)
+        # IfcMeasureWithUnit.ValueComponent is IfcValue (SELECT type).
+        # Passing a plain Python float may not be correctly encoded; wrap it
+        # explicitly as IfcNumericMeasure so the STEP serialiser knows the type.
+        wrapped_qty = file.create_entity("IfcNumericMeasure", qty)
         unit_basis = file.create_entity(
             "IfcMeasureWithUnit",
-            ValueComponent=qty,
+            ValueComponent=wrapped_qty,
             UnitComponent=unit_entity,
         )
         cv.UnitBasis = unit_basis
@@ -488,49 +577,79 @@ class RA_OT_AddFromRate(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class RA_OT_RemoveComponent(bpy.types.Operator):
+# ---------------------------------------------------------------------------
+# Generic base classes for WindowManager collection list operators
+# ---------------------------------------------------------------------------
+
+class _WMListRemove(bpy.types.Operator):
+    """Remove the active item from a WindowManager CollectionProperty."""
+    bl_options = {'REGISTER', 'UNDO'}
+    _collection_attr: str
+    _index_attr: str
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = getattr(wm, self._collection_attr)
+        idx   = getattr(wm, self._index_attr)
+        if 0 <= idx < len(items):
+            items.remove(idx)
+            setattr(wm, self._index_attr, max(0, idx - 1))
+        return {'FINISHED'}
+
+
+class _WMListMoveUp(bpy.types.Operator):
+    bl_options = {'REGISTER', 'UNDO'}
+    _collection_attr: str
+    _index_attr: str
+
+    def execute(self, context):
+        wm  = context.window_manager
+        items = getattr(wm, self._collection_attr)
+        idx   = getattr(wm, self._index_attr)
+        if idx > 0:
+            items.move(idx, idx - 1)
+            setattr(wm, self._index_attr, idx - 1)
+        return {'FINISHED'}
+
+
+class _WMListMoveDown(bpy.types.Operator):
+    bl_options = {'REGISTER', 'UNDO'}
+    _collection_attr: str
+    _index_attr: str
+
+    def execute(self, context):
+        wm    = context.window_manager
+        items = getattr(wm, self._collection_attr)
+        idx   = getattr(wm, self._index_attr)
+        if idx < len(items) - 1:
+            items.move(idx, idx + 1)
+            setattr(wm, self._index_attr, idx + 1)
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Rate Analysis list operators
+# ---------------------------------------------------------------------------
+
+class RA_OT_RemoveComponent(_WMListRemove):
     bl_idname = "rate_analysis.remove_component"
     bl_label = "Remove Component"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        comps = wm.rate_analysis_components
-        idx = wm.rate_analysis_active_index
-        if 0 <= idx < len(comps):
-            comps.remove(idx)
-            wm.rate_analysis_active_index = max(0, idx - 1)
-        return {'FINISHED'}
+    _collection_attr = "rate_analysis_components"
+    _index_attr      = "rate_analysis_active_index"
 
 
-class RA_OT_MoveUp(bpy.types.Operator):
+class RA_OT_MoveUp(_WMListMoveUp):
     bl_idname = "rate_analysis.move_up"
     bl_label = "Move Up"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        comps = wm.rate_analysis_components
-        idx = wm.rate_analysis_active_index
-        if idx > 0:
-            comps.move(idx, idx - 1)
-            wm.rate_analysis_active_index = idx - 1
-        return {'FINISHED'}
+    _collection_attr = "rate_analysis_components"
+    _index_attr      = "rate_analysis_active_index"
 
 
-class RA_OT_MoveDown(bpy.types.Operator):
+class RA_OT_MoveDown(_WMListMoveDown):
     bl_idname = "rate_analysis.move_down"
     bl_label = "Move Down"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        comps = wm.rate_analysis_components
-        idx = wm.rate_analysis_active_index
-        if idx < len(comps) - 1:
-            comps.move(idx, idx + 1)
-            wm.rate_analysis_active_index = idx + 1
-        return {'FINISHED'}
+    _collection_attr = "rate_analysis_components"
+    _index_attr      = "rate_analysis_active_index"
 
 
 class RA_OT_ClearAll(bpy.types.Operator):
@@ -661,13 +780,12 @@ class RA_OT_ApplyItemInfo(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
+
         file = tool.Ifc.get()
         wm = context.window_manager
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
         _write_cost_item_info(tool, cost_item, wm)
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
 
 
 class RA_OT_ApplyToIfc(*_IfcOperatorBase):
@@ -682,7 +800,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
+
 
         wm = context.window_manager
         file = tool.Ifc.get()
@@ -731,8 +849,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
                 "AppliedValue": round(wm.rate_analysis_rounding, 2),
             })
 
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
 
 
 def _find_parent_and_index(file, props):
@@ -803,7 +920,7 @@ class RA_OT_AddSummaryCost(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
+
 
         file = tool.Ifc.get()
         props = context.scene.BIMCostProperties
@@ -831,8 +948,7 @@ class RA_OT_AddSummaryCost(*_IfcOperatorBase):
         cv = tool.Ifc.run("cost.add_cost_value", parent=new_item)
         tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={"Category": "*"})
 
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
         _select_and_load(context, new_item.id())
 
 
@@ -869,7 +985,7 @@ class RA_OT_AddCostItem(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
+
 
         file = tool.Ifc.get()
         props = context.scene.BIMCostProperties
@@ -894,8 +1010,7 @@ class RA_OT_AddCostItem(*_IfcOperatorBase):
             else:
                 new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
 
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
         _select_and_load(context, new_item.id())
 
 
@@ -960,49 +1075,25 @@ class QTY_OT_AddRow(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class QTY_OT_RemoveRow(bpy.types.Operator):
+class QTY_OT_RemoveRow(_WMListRemove):
     bl_idname = "cost_quantities.remove_row"
     bl_label = "Remove Measurement Row"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        items = wm.cost_quantities
-        idx = wm.cost_quantities_active_index
-        if 0 <= idx < len(items):
-            items.remove(idx)
-            wm.cost_quantities_active_index = max(0, idx - 1)
-        return {'FINISHED'}
+    _collection_attr = "cost_quantities"
+    _index_attr      = "cost_quantities_active_index"
 
 
-class QTY_OT_MoveRowUp(bpy.types.Operator):
+class QTY_OT_MoveRowUp(_WMListMoveUp):
     bl_idname = "cost_quantities.move_row_up"
     bl_label = "Move Row Up"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        items = wm.cost_quantities
-        idx = wm.cost_quantities_active_index
-        if idx > 0:
-            items.move(idx, idx - 1)
-            wm.cost_quantities_active_index = idx - 1
-        return {'FINISHED'}
+    _collection_attr = "cost_quantities"
+    _index_attr      = "cost_quantities_active_index"
 
 
-class QTY_OT_MoveRowDown(bpy.types.Operator):
+class QTY_OT_MoveRowDown(_WMListMoveDown):
     bl_idname = "cost_quantities.move_row_down"
     bl_label = "Move Row Down"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        wm = context.window_manager
-        items = wm.cost_quantities
-        idx = wm.cost_quantities_active_index
-        if idx < len(items) - 1:
-            items.move(idx, idx + 1)
-            wm.cost_quantities_active_index = idx + 1
-        return {'FINISHED'}
+    _collection_attr = "cost_quantities"
+    _index_attr      = "cost_quantities_active_index"
 
 
 class QTY_OT_InsertRowAfter(bpy.types.Operator):
@@ -1056,7 +1147,7 @@ class QTY_OT_Apply(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
+
         file = tool.Ifc.get()
         wm = context.window_manager
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
@@ -1079,8 +1170,7 @@ class QTY_OT_Apply(*_IfcOperatorBase):
             new_quantities.append(file.create_entity(ifc_class, **kw))
 
         cost_item.CostQuantities = new_quantities
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
 
 
 classes = [
