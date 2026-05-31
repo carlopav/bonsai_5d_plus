@@ -10,6 +10,7 @@ from .data import (
     _collect_leaf_items, _build_unique_items, _collect_sor_items,
     _compare_cost_items, _format_diffs, _copy_cost_values, _replace_cost_values,
 )
+from ...tool.cost import refresh_cost_ui
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -221,7 +222,6 @@ class BoQToSoROperator(*_IfcOperatorBase):
             return
 
         from bonsai import tool
-        import bonsai.bim.module.cost.data
 
         to_add = _data._state["to_add"]
         if not to_add:
@@ -246,8 +246,7 @@ class BoQToSoROperator(*_IfcOperatorBase):
             })
             _copy_cost_values(tool, source_item, new_item)
 
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
         action = "Created" if _data._state["mode"] == "NEW" else "Updated"
         self.report({"INFO"}, f"{action} '{target_schedule.Name}': {len(to_add)} item(s) added.")
 
@@ -389,7 +388,6 @@ class BoQToSoRResolveOperator(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
 
         lookup = {
             (m["boq_item"].Identification or "", m["boq_item"].Name or ""): m
@@ -422,8 +420,7 @@ class BoQToSoRResolveOperator(*_IfcOperatorBase):
             modified += 1
 
         if modified:
-            bonsai.bim.module.cost.data.refresh()
-            tool.Cost.load_cost_schedule_tree()
+            refresh_cost_ui(tool)
 
         self.report({"INFO"}, f"Resolved {modified} rate(s).")
         return {"FINISHED"}

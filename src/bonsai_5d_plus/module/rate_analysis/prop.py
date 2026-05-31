@@ -5,6 +5,9 @@
 
 import bpy
 from .operator import COMPONENT_CATEGORIES
+from ...tool.cost import QTY_TYPE_INFO
+
+_QTY_ENUM_ITEMS = [(k, v['label'], v['label']) for k, v in QTY_TYPE_INFO.items()]
 
 
 class RateAnalysisComponent(bpy.types.PropertyGroup):
@@ -83,28 +86,24 @@ def register():
         name="Target IFC ID",
         description="IFC step ID of the cost item being analysed (0 = none)",
         default=0,
+        options={'SKIP_SAVE'},
     )
     bpy.types.WindowManager.rate_analysis_editing_description = bpy.props.BoolProperty(
         name="Editing Description",
         default=False,
+        options={'SKIP_SAVE'},
     )
     bpy.types.WindowManager.rate_analysis_auto_load = bpy.props.BoolProperty(
         name="Auto Load",
         description="Automatically reload data when the active cost item changes",
         default=False,
+        options={'SKIP_SAVE'},
     )
     bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
     bpy.types.WindowManager.cost_quantities_active_index = bpy.props.IntProperty(default=0)
     bpy.types.WindowManager.cost_quantities_type = bpy.props.EnumProperty(
         name="Quantity Type",
-        items=[
-            ('AREA',   "Area",   "Surface area (m²)"),
-            ('VOLUME', "Volume", "Volume (m³)"),
-            ('LENGTH', "Length", "Length (m)"),
-            ('COUNT',  "Count",  "Count (number of items)"),
-            ('WEIGHT', "Weight", "Weight (kg)"),
-            ('TIME',   "Time",   "Time (h)"),
-        ],
+        items=_QTY_ENUM_ITEMS,
         default='COUNT',
     )
 

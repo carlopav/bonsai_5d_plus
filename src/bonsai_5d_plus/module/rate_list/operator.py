@@ -9,7 +9,7 @@ from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper
 
 from .data import _do_import, _do_import_ifc, _refresh_ifc_schedules_cache, _invalidate_filter_cache
-from ...tool.cost import create_cost_item
+from ...tool.cost import create_cost_item, refresh_cost_ui
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -131,15 +131,13 @@ class AssignRateValue(*_IfcOperatorBase):
     def _execute(self, context):
         from bonsai import tool
         from bonsai.core import cost as cost_core
-        import bonsai.bim.module.cost.data
         selected = context.scene.xml_rate_list[context.scene.xml_rate_list_active_index]
         ifc_id = json.loads(selected.attributes).get("ifc_id", 0)
         file = tool.Ifc.get()
         cost_item = file.by_id(context.scene.BIMCostProperties.active_cost_item.ifc_definition_id)
         cost_rate = file.by_id(ifc_id)
         cost_core.assign_cost_value(tool.Ifc, tool.Cost, cost_item=cost_item, cost_rate=cost_rate)
-        bonsai.bim.module.cost.data.refresh()
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
 
 
 class CUSTOM_OT_toggle(Operator):

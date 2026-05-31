@@ -5,6 +5,7 @@
 
 import bpy
 from . import data as _data
+from ...tool.cost import refresh_cost_ui
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -108,7 +109,7 @@ class BulkUpdateCostSchedule(*_IfcOperatorBase):
 
             count += 1
 
-        tool.Cost.load_cost_schedule_tree()
+        refresh_cost_ui(tool)
         self.report({'INFO'}, f"Updated {count} cost items.")
 
 

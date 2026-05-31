@@ -6,6 +6,7 @@
 import bpy
 from . import data as _data
 from .data import _get_ifc, _get_schedules, _get_applied_value, _get_quantity, _iter_leaves, _copy_items, _build_comparison, _invalidate_tender_enum_caches
+from ...tool.cost import refresh_cost_ui
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -35,7 +36,6 @@ class CreateTenderScheduleOperator(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        import bonsai.bim.module.cost.data
 
         file = tool.Ifc.get()
         source = file.by_id(int(context.scene.tender_source_boq))
@@ -47,11 +47,7 @@ class CreateTenderScheduleOperator(*_IfcOperatorBase):
         safety = context.scene.tender_safety_item_id if mode == "DISCOUNT" else "NONE"
         _copy_items(tool, source, tender, discount_pct=discount, safety_item_id=safety)
 
-        bonsai.bim.module.cost.data.refresh()
-        try:
-            tool.Cost.load_cost_schedule_tree()
-        except Exception:
-            pass
+        refresh_cost_ui(tool)
         _invalidate_tender_enum_caches()
         self.report({"INFO"}, f"Created '{company}'.")
 
@@ -136,10 +132,7 @@ class EditTenderPricesOperator(*_IfcOperatorBase):
                              attributes={"AppliedValue": entry.unit_price})
             count += 1
 
-        try:
-            tool.Cost.load_cost_schedule_tree()
-        except Exception:
-            pass
+        refresh_cost_ui(tool)
         self.report({"INFO"}, f"Updated {count} prices in '{self._schedule_name}'.")
 
 
