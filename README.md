@@ -50,6 +50,17 @@ Gestisce automaticamente:
 - confronto puntuale tra BoQ e SoR con diff inline e risoluzione interattiva voce per voce
 - report copiabile negli appunti in formato TSV (per LibreOffice Calc)
 
+### Prints Manager
+Esporta in PDF i documenti di costo direttamente dalla sidebar, senza passare per tool esterni. Il motore di rendering è [Typst](https://typst.app), già disponibile come dipendenza nell'estensione `typst_importer` di Blender. Il PDF generato viene aperto automaticamente al termine.
+
+**Export Schedule to PDF** — Stampa il Cost Schedule attivo in formato PDF tramite `Ifc5DPdfWriter` (ifc5d / IfcOpenShell). Il dialogo permette di scegliere tipo di documento (Priced BoQ, Schedule of Rates, ecc.), visibilità di tariffe, descrizioni, quantità di dettaglio, pagina di riepilogo e copertina.
+
+**Export Rate Analysis to PDF** — Stampa la **scheda analisi prezzi** della voce attiva (item pinnato nell'editor oppure item selezionato nel pannello Bonsai). I dati vengono letti **direttamente dall'IFC**, non dalla UI, quindi non è necessario aver caricato la voce nell'editor prima di esportare. Per ogni categoria di componenti (Opere Compiute, Manodopera, Noli, Materiali, Oneri per la Sicurezza) viene generato un riquadro con intestazione e subtotale separati. Il footer della scheda mostra: costo tecnico, spese generali (%), utile d'impresa (%), arrotondamento e prezzo finale.
+
+**Export Sheets to PDF** — Converte gli sheet SVG prodotti da Bonsai Drawing in PDF, salvandoli accanto agli SVG originali. Se gli sheet sono ≤ 3 apre tutti i PDF generati; se sono più di 3 apre la cartella contenitore.
+
+**Convenzione IFC:** quando l'utente applica un'analisi prezzi tramite il Rate Analysis editor, la voce `IfcCostItem` riceve `ObjectType = "RATE_ANALYSIS"`. Questo marcatore permette di distinguere le voci con vera analisi prezzi dai semplici item prezzario che riportano incidenze di categoria (Labor, Safety, ecc.) senza una struttura qty × prezzo unitario. Non altera la struttura `CostValues` e resta leggibile da qualsiasi editor IFC.
+
 ### Bulk Update Cost Schedule
 Aggiorna in blocco i valori unitari del Cost Schedule attivo leggendo le tariffe dal prezzario caricato, con anteprima delle modifiche prima di applicarle.
 
@@ -118,6 +129,12 @@ blender.exe --background --python tools/generate_classifications.py
   - *Quantities (measurement book)*: interactive libretto-delle-misure table for `IfcCostItem.CostQuantities`. Each row has NR × L × B × H fields with live partial computation and a running total. Writes one `IfcQuantityXxx` per row using the IFC4 `Formula` attribute for the expression.
 
 - **BoQ → Schedule of Rates** — extracts leaf items from a Bill of Quantities and transfers them to a Schedule of Rates (new or existing), with automatic deduplication, conflict detection, and an interactive per-item diff resolver.
+
+- **Prints Manager** — PDF export for cost documents, powered by [Typst](https://typst.app):
+  - *Export Schedule to PDF*: renders the active `IfcCostSchedule` to PDF via `Ifc5DPdfWriter` (ifc5d / IfcOpenShell) with configurable options (document type, rates visibility, quantity breakdown, summary page, cover).
+  - *Export Rate Analysis to PDF*: generates a **scheda analisi prezzi** for the active cost item. Data is read **directly from the IFC file** (not from the UI state), so no prior loading in the Rate Analysis editor is required. Components are grouped by category (Sub-Contract, Labor, Equipment, Material, Safety) with a separate header and subtotal per group; the footer shows technical cost, overhead %, profit %, rounding, and final price.
+  - *Export Sheets to PDF*: converts Bonsai Drawing SVG sheets to PDF, saved alongside the originals; opens generated files automatically.
+  - **IFC convention:** applying a rate analysis via the Rate Analysis editor sets `IfcCostItem.ObjectType = "RATE_ANALYSIS"` on the item. This marker reliably distinguishes items with a genuine unit-price breakdown from prezzario items that carry Labour/Safety cost values as category incidences only. It does not affect the `CostValues` structure and is readable by any IFC-compliant tool.
 
 - **Bulk Update Cost Schedule** — batch-updates unit prices in the active Cost Schedule from the loaded price list, with a preview before applying.
 

@@ -21,6 +21,118 @@
 import json
 
 
+# ---------------------------------------------------------------------------
+# Unit resolution helpers (shared with rate_analysis)
+# ---------------------------------------------------------------------------
+
+# unit string → (UnitType, IFC_Name, Prefix|None)
+_UNIT_TO_SI_DESCRIPTOR = {
+    "mq": ("AREAUNIT",   "SQUARE_METRE", None),
+    "m2": ("AREAUNIT",   "SQUARE_METRE", None),
+    "m²": ("AREAUNIT",   "SQUARE_METRE", None),
+    "mc": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m3": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m³": ("VOLUMEUNIT", "CUBIC_METRE",  None),
+    "m":  ("LENGTHUNIT", "METRE",        None),
+    "ml": ("LENGTHUNIT", "METRE",        None),
+    "lm": ("LENGTHUNIT", "METRE",        None),
+    "km": ("LENGTHUNIT", "METRE",        "KILO"),
+    "dm": ("LENGTHUNIT", "METRE",        "DECI"),
+    "cm": ("LENGTHUNIT", "METRE",        "CENTI"),
+    "kg": ("MASSUNIT",   "GRAM",         "KILO"),
+    "t":  ("MASSUNIT",   "GRAM",         "MEGA"),
+}
+
+# unit string → (UnitType, canonical_name, factor, SI_base_UnitType, SI_base_Name, SI_base_Prefix)
+_UNIT_TO_CONVERSION_DESCRIPTOR = {
+    "h":   ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "ore": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "ora": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
+    "min": ("TIMEUNIT", "MINUTE",   60.0, "TIMEUNIT", "SECOND", None),
+}
+
+
+def _find_si_unit(file, unit_type, si_name, prefix):
+    for u in file.by_type("IfcSIUnit"):
+        if u.UnitType == unit_type and u.Name == si_name and (u.Prefix or None) == prefix:
+            return u
+    return None
+
+
+def get_or_create_unit_entity(file, unit_str):
+    """Return an IFC unit entity for unit_str, reusing project units where possible."""
+    key = unit_str.lower().strip()
+
+    si_desc = _UNIT_TO_SI_DESCRIPTOR.get(key)
+    if si_desc:
+        found = _find_si_unit(file, *si_desc)
+        if found:
+            return found
+
+    conv_desc = _UNIT_TO_CONVERSION_DESCRIPTOR.get(key)
+    if conv_desc:
+        unit_type, name, factor, base_type, base_name, base_prefix = conv_desc
+        for u in file.by_type("IfcConversionBasedUnit"):
+            if u.UnitType == unit_type and (u.Name or "").upper() == name:
+                return u
+        base_si = _find_si_unit(file, base_type, base_name, base_prefix)
+        if base_si:
+            dims = file.create_entity(
+                "IfcDimensionalExponents",
+                LengthExponent=0, MassExponent=0, TimeExponent=1,
+                ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
+                AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
+            )
+            conversion_factor = file.create_entity(
+                "IfcMeasureWithUnit",
+                ValueComponent=file.create_entity("IfcNumericMeasure", factor),
+                UnitComponent=base_si,
+            )
+            return file.create_entity(
+                "IfcConversionBasedUnit",
+                Dimensions=dims,
+                UnitType=unit_type,
+                Name=name,
+                ConversionFactor=conversion_factor,
+            )
+
+    for ifc_class in ("IfcConversionBasedUnit", "IfcContextDependentUnit"):
+        for u in file.by_type(ifc_class):
+            if (u.Name or "").lower().strip() == key:
+                return u
+
+    dims = file.create_entity(
+        "IfcDimensionalExponents",
+        LengthExponent=0, MassExponent=0, TimeExponent=0,
+        ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
+        AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
+    )
+    return file.create_entity(
+        "IfcContextDependentUnit",
+        Dimensions=dims,
+        UnitType="USERDEFINED",
+        Name=unit_str,
+    )
+
+
+def set_unit_basis(file, cv, qty, unit_str):
+    """Set cv.UnitBasis = IfcMeasureWithUnit(qty, unit_entity). Returns True on success."""
+    if not unit_str:
+        return False
+    try:
+        unit_entity = get_or_create_unit_entity(file, unit_str)
+        wrapped_qty = file.create_entity("IfcNumericMeasure", qty)
+        unit_basis = file.create_entity(
+            "IfcMeasureWithUnit",
+            ValueComponent=wrapped_qty,
+            UnitComponent=unit_entity,
+        )
+        cv.UnitBasis = unit_basis
+        return True
+    except Exception:
+        return False
+
+
 def _ifc_str(s):
     """Strip whitespace; return None if empty (IfcLabel must be non-empty)."""
     s = (s or "").strip()
@@ -188,6 +300,7 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
     materials = float(rate_attrib["materials"])
     safety = float(rate_attrib["safety"])
     total_value = float(rate_attrib["value"])
+    unit = rate_attrib.get("unit", "")
 
     components = [
         ("Labor", labor),
@@ -201,12 +314,14 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
         cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
         tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
                      attributes={"AppliedValue": round(total_value, 2)})
+        set_unit_basis(file, cost_value, 1.0, unit)
     else:
         remaining = round(total_value - sum(v for _, v in components), 2)
         if remaining != 0.0:
             cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
             tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
                          attributes={"AppliedValue": remaining})
+            set_unit_basis(file, cost_value, 1.0, unit)
         for category, amount in components:
             if amount != 0.0:
                 cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
@@ -214,6 +329,7 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
                     "Category": category,
                     "AppliedValue": round(amount, 2),
                 })
+                set_unit_basis(file, cost_value, 1.0, unit)
 
     _refresh_ui(tool)
 
@@ -281,6 +397,7 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
 
             if not rate["is_parent"]:
                 value = float(rate["value"])
+                unit = rate.get("unit", "")
                 components = [
                     ("Labor",     float(rate["labor"])),
                     ("Equipment", float(rate["equipment"])),
@@ -294,12 +411,14 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
                         cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
                         tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
                                      attributes={"AppliedValue": round(value, 2)})
+                        set_unit_basis(file, cv, 1.0, unit)
                 else:
                     remaining = round(value - sum(v for _, v in components), 2)
                     if remaining != 0.0:
                         cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
                         tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
                                      attributes={"AppliedValue": remaining})
+                        set_unit_basis(file, cv, 1.0, unit)
                     for category, amount in components:
                         if amount != 0.0:
                             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
@@ -307,6 +426,7 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
                                 "Category": category,
                                 "AppliedValue": round(amount, 2),
                             })
+                            set_unit_basis(file, cv, 1.0, unit)
 
             index_to_ifc[rate["index"]] = cost_item
 

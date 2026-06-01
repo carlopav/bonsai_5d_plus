@@ -4,7 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
-from .operator import ExportSheetsToPdfOperator, _get_ifc
+from .operator import _get_ifc
 
 
 class SvgToPdfPanel(bpy.types.Panel):
@@ -20,7 +20,12 @@ class SvgToPdfPanel(bpy.types.Panel):
         if _get_ifc() is None:
             layout.label(text="No IFC file loaded.", icon="ERROR")
             return
-        layout.operator(ExportSheetsToPdfOperator.bl_idname, icon="FILE_BLANK")
+
+        layout.operator("bim.export_sheets_to_pdf",        icon="FILE_BLANK")
+        layout.separator(factor=0.5)
+        layout.operator("bim.export_schedule_to_pdf",      icon="FILE_TEXT")
+        layout.separator(factor=0.5)
+        layout.operator("bim.export_rate_analysis_to_pdf", icon="SCRIPT")
 
 
 classes = [SvgToPdfPanel]

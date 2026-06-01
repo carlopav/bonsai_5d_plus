@@ -12,6 +12,8 @@ from ...tool.cost import (
     QTY_FROM_IFC_CLASS,
     refresh_cost_ui,
     get_cost_item_children,
+    get_or_create_unit_entity,
+    set_unit_basis,
 )
 
 try:
@@ -149,127 +151,6 @@ def _get_totals(wm):
 
 
 # unit string → (UnitType, SIName, Prefix|None)  — reuse existing IfcSIUnit
-_UNIT_TO_SI_DESCRIPTOR = {
-    "mq": ("AREAUNIT",   "SQUARE_METRE", None),
-    "m2": ("AREAUNIT",   "SQUARE_METRE", None),
-    "m²": ("AREAUNIT",   "SQUARE_METRE", None),
-    "mc": ("VOLUMEUNIT", "CUBIC_METRE",  None),
-    "m3": ("VOLUMEUNIT", "CUBIC_METRE",  None),
-    "m³": ("VOLUMEUNIT", "CUBIC_METRE",  None),
-    "m":  ("LENGTHUNIT", "METRE",        None),
-    "ml": ("LENGTHUNIT", "METRE",        None),
-    "lm": ("LENGTHUNIT", "METRE",        None),
-    "km": ("LENGTHUNIT", "METRE",        "KILO"),
-    "dm": ("LENGTHUNIT", "METRE",        "DECI"),
-    "cm": ("LENGTHUNIT", "METRE",        "CENTI"),
-    "kg": ("MASSUNIT",   "GRAM",         "KILO"),
-    "t":  ("MASSUNIT",   "GRAM",         "MEGA"),    # metric tonne = megagram
-}
-
-# unit string → (UnitType, canonical_name, factor, SI_base_UnitType, SI_base_Name, SI_base_Prefix)
-# Used to create IfcConversionBasedUnit when not already present.
-_UNIT_TO_CONVERSION_DESCRIPTOR = {
-    "h":   ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
-    "ore": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
-    "ora": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
-    "min": ("TIMEUNIT", "MINUTE",   60.0, "TIMEUNIT", "SECOND", None),
-}
-
-
-def _find_si_unit(file, unit_type, si_name, prefix):
-    for u in file.by_type("IfcSIUnit"):
-        if u.UnitType == unit_type and u.Name == si_name and (u.Prefix or None) == prefix:
-            return u
-    return None
-
-
-def _get_or_create_unit_entity(file, unit_str):
-    """Return an IFC unit entity for unit_str, reusing project units where possible.
-
-    Lookup order:
-    1. IfcSIUnit in the file matching the descriptor (e.g. SQUARE_METRE for 'mq')
-    2. IfcConversionBasedUnit — reuse existing or create with correct factor (e.g. HOUR)
-    3. IfcConversionBasedUnit / IfcContextDependentUnit already in file with same name
-    4. Create a new IfcContextDependentUnit as last resort
-    """
-    key = unit_str.lower().strip()
-
-    # 1. Match an existing IfcSIUnit (covers m, mq, mc, cm, km, kg, t, …)
-    si_desc = _UNIT_TO_SI_DESCRIPTOR.get(key)
-    if si_desc:
-        found = _find_si_unit(file, *si_desc)
-        if found:
-            return found
-
-    # 2. Match or create an IfcConversionBasedUnit (covers h, ore, ora, min)
-    conv_desc = _UNIT_TO_CONVERSION_DESCRIPTOR.get(key)
-    if conv_desc:
-        unit_type, name, factor, base_type, base_name, base_prefix = conv_desc
-        # Reuse if already present (match by UnitType + canonical name)
-        for u in file.by_type("IfcConversionBasedUnit"):
-            if u.UnitType == unit_type and (u.Name or "").upper() == name:
-                return u
-        # Create it
-        base_si = _find_si_unit(file, base_type, base_name, base_prefix)
-        if base_si:
-            dims = file.create_entity(
-                "IfcDimensionalExponents",
-                LengthExponent=0, MassExponent=0, TimeExponent=1,
-                ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
-                AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
-            )
-            conversion_factor = file.create_entity(
-                "IfcMeasureWithUnit",
-                ValueComponent=file.create_entity("IfcNumericMeasure", factor),
-                UnitComponent=base_si,
-            )
-            return file.create_entity(
-                "IfcConversionBasedUnit",
-                Dimensions=dims,
-                UnitType=unit_type,
-                Name=name,
-                ConversionFactor=conversion_factor,
-            )
-
-    # 3. Reuse any existing named unit
-    for ifc_class in ("IfcConversionBasedUnit", "IfcContextDependentUnit"):
-        for u in file.by_type(ifc_class):
-            if (u.Name or "").lower().strip() == key:
-                return u
-
-    # 4. Last resort: create a context-dependent unit
-    dims = file.create_entity(
-        "IfcDimensionalExponents",
-        LengthExponent=0, MassExponent=0, TimeExponent=0,
-        ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
-        AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
-    )
-    return file.create_entity(
-        "IfcContextDependentUnit",
-        Dimensions=dims,
-        UnitType="USERDEFINED",
-        Name=unit_str,
-    )
-
-
-def _set_unit_basis(file, cv, qty, unit_str):
-    if not unit_str:
-        return False
-    try:
-        unit_entity = _get_or_create_unit_entity(file, unit_str)
-        # IfcMeasureWithUnit.ValueComponent is IfcValue (SELECT type).
-        # Passing a plain Python float may not be correctly encoded; wrap it
-        # explicitly as IfcNumericMeasure so the STEP serialiser knows the type.
-        wrapped_qty = file.create_entity("IfcNumericMeasure", qty)
-        unit_basis = file.create_entity(
-            "IfcMeasureWithUnit",
-            ValueComponent=wrapped_qty,
-            UnitComponent=unit_entity,
-        )
-        cv.UnitBasis = unit_basis
-        return True
-    except Exception:
-        return False
 
 
 def _read_unit_basis(cv):
@@ -807,6 +688,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
 
         _write_cost_item_info(tool, cost_item, wm)
+        tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": "RATE_ANALYSIS"})
         _remove_analysis_values(tool, cost_item)
         ct, sg, profit, final = _get_totals(wm)
 
@@ -823,7 +705,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
                 "Category": _TO_IFC.get(comp.category),
                 "AppliedValue": line_total,
             })
-            _set_unit_basis(file, cv, comp.qty, comp.unit)
+            set_unit_basis(file, cv, comp.qty, comp.unit)
             if comp.source_ifc_id:
                 cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
 
