@@ -28,7 +28,16 @@ Pannello centrale per editare una voce di computo `IfcCostItem` direttamente dal
 
 **Identification** — Identification, Name e Description su singola riga con tooltip che mostra il testo completo. La Description supporta testi lunghi tramite il **Text Editor** integrato di Blender, aperto in una **finestra flottante** separata (la 3D View non viene mai sostituita).
 
-**Rate Analysis** — Costruisce l'**analisi del prezzo** scomponendo il costo unitario nelle componenti elementari (Sub-Contract, Labor, Equipment, Material, Safety), applicando percentuali di spese generali e utile d'impresa e calcolando il prezzo finale arrotondato. I dati vengono scritti nel file IFC come `IfcCostValue` con categoria e struttura round-trip. I riferimenti alle tariffe sorgente vengono tracciati con segnalazione automatica se il valore è cambiato.
+**Rate Analysis** — Costruisce l'**analisi del prezzo** di una voce scomponendo il costo unitario in componenti elementari:
+
+- **Categorie componenti:** Sub-Contract, Labor, Equipment, Material, Safety (+ NONE per valori liberi)
+- **Campi per componente:** descrizione, quantità, unità di misura, prezzo unitario
+- **Totali automatici:** costo tecnico, spese generali (%), utile d'impresa (%), arrotondamento → prezzo finale
+- **Import da prezzario:** aggiunge direttamente una voce dal Rate List come componente collegato
+- **Segnalazione aggiornamenti:** se il prezzo della tariffa sorgente è cambiato dall'ultima applicazione, il componente viene evidenziato con un bottone di aggiornamento rapido
+- **Auto-load:** opzione per ricaricare automaticamente i dati quando cambia la voce attiva nel pannello Bonsai
+
+**Struttura IFC scritta:** ogni componente diventa un `IfcCostValue` con `Category` (es. "Labor"), `AppliedValue` = totale riga (qty × prezzo unitario), `UnitBasis` = `IfcMeasureWithUnit(IfcNumericMeasure(qty), unità)`. La quantità e l'unità del componente sono quindi recuperabili al round-trip. I riferimenti alla tariffa sorgente vengono salvati in `IfcCostValue.Description` nel formato `ref:[Identificazione](#ifc:STEP_ID)`. Spese generali, utile e arrotondamento sono `IfcCostValue` separati con `Category` = "Overhead", "Profit", "Rounding". Le unità di misura riusano le `IfcSIUnit` del progetto (`mq`→`SQUARE_METRE`, ecc.) o creano `IfcConversionBasedUnit` per ore e minuti, minimizzando le entità user-defined nel file.
 
 **Quantities (libretto delle misure)** — Lettura e modifica di `IfcCostItem.CostQuantities` tramite un libretto delle misure interattivo. Ogni riga ha campi **NR × L × B × H** con parziale calcolato in tempo reale e totale complessivo a fondo pannello. Il tipo di quantità (Area, Volume, Lunghezza, Conteggio, Peso, Tempo) determina il sottotipo `IfcQuantity` scritto nel file. La formula viene salvata nell'attributo `Formula` (IFC4) con round-trip completo.
 
@@ -105,7 +114,7 @@ blender.exe --background --python tools/generate_classifications.py
 
 - **Cost Item Editor** — three-panel editor for a single `IfcCostItem`:
   - *Identification*: single-line ID / Name / Description fields; full description visible in tooltip; long descriptions edited in a dedicated floating Text Editor window.
-  - *Rate Analysis*: unit price breakdown into components (Sub-Contract, Labor, Equipment, Material, Safety) with overhead and profit percentages. Written to IFC as `IfcCostValue` with full round-trip support and automatic stale-rate detection.
+  - *Rate Analysis*: unit price breakdown into components (Sub-Contract, Labor, Equipment, Material, Safety) with overhead %, profit %, and rounding. Each component is written as an `IfcCostValue` with `Category`, `AppliedValue` (qty × unit price), and `UnitBasis` (`IfcNumericMeasure(qty)` + unit entity) for full round-trip. Source rate references are tracked in `Description` as `ref:[ID](#ifc:STEP_ID)` with automatic stale-rate detection. Unit entities reuse existing project `IfcSIUnit` instances (e.g. `SQUARE_METRE` for `mq`) or create `IfcConversionBasedUnit` for hours/minutes — minimising user-defined unit pollution in the file.
   - *Quantities (measurement book)*: interactive libretto-delle-misure table for `IfcCostItem.CostQuantities`. Each row has NR × L × B × H fields with live partial computation and a running total. Writes one `IfcQuantityXxx` per row using the IFC4 `Formula` attribute for the expression.
 
 - **BoQ → Schedule of Rates** — extracts leaf items from a Bill of Quantities and transfers them to a Schedule of Rates (new or existing), with automatic deduplication, conflict detection, and an interactive per-item diff resolver.
