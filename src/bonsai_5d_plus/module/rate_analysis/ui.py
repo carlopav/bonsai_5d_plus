@@ -209,7 +209,9 @@ class CIE_PT_RateAnalysis(bpy.types.Panel):
 
         box2 = layout.box()
         split = box2.split(factor=0.6)
-        split.label(text="FINAL PRICE:", icon="DISC")
+        row_label = split.row(align=True)
+        row_label.label(text="FINAL PRICE:", icon="DISC")
+        row_label.prop(wm, "rate_analysis_unit", text="")
         r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{final:.2f}")
 
         layout.separator(factor=0.3)
@@ -261,10 +263,12 @@ class CIE_PT_Quantities(bpy.types.Panel):
         row = layout.row(align=True)
         row.prop(wm, "cost_quantities_type", text="")
         row.separator()
-        row.operator("cost_quantities.add_row",    text="", icon="ADD")
-        row.operator("cost_quantities.remove_row", text="", icon="REMOVE")
+        row.operator("cost_quantities.add_row",       text="", icon="ADD")
+        row.operator("cost_quantities.remove_row",    text="", icon="REMOVE")
         row.operator("cost_quantities.move_row_up",   text="", icon="TRIA_UP")
         row.operator("cost_quantities.move_row_down", text="", icon="TRIA_DOWN")
+        row.separator()
+        row.operator("rate_analysis.add_zero_quantity", text="", icon="RADIOBUT_OFF")
 
         # Column headers — mirrors UIList column proportions
         hdr = layout.row(align=True)

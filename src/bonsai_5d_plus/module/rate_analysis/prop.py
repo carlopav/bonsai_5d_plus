@@ -73,6 +73,11 @@ def register():
         description="Rounding adjustment (positive or negative) added to the final price",
         default=0.0, precision=2,
     )
+    bpy.types.WindowManager.rate_analysis_unit = bpy.props.StringProperty(
+        name="Unit of Measure",
+        description="Unit of measure for the finished work (e.g. mq, mc, m, cad)",
+        default="",
+    )
     bpy.types.WindowManager.rate_analysis_item_identification = bpy.props.StringProperty(
         name="Identification", default="",
     )
@@ -114,6 +119,7 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_overhead_pct
     del bpy.types.WindowManager.rate_analysis_profit_pct
     del bpy.types.WindowManager.rate_analysis_rounding
+    del bpy.types.WindowManager.rate_analysis_unit
     del bpy.types.WindowManager.rate_analysis_item_identification
     del bpy.types.WindowManager.rate_analysis_item_name
     del bpy.types.WindowManager.rate_analysis_item_description

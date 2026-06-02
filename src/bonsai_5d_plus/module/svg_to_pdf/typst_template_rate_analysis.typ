@@ -125,6 +125,66 @@
 }
 
 
+#let render_analysis(
+  csv_path: "",
+  item_identification: "",
+  item_name: "",
+  item_description: "",
+  project_currency: "EUR",
+) = {
+  // — Item header —
+  table(
+    columns: (35mm, 1fr),
+    stroke: 0.75pt,
+    inset: (x: 3mm, y: 2mm),
+    align: (left, left),
+    table.header(
+      table.cell(
+        fill: gray.transparentize(80%),
+        inset: (x: 3mm, y: 1mm),
+      )[#text(size: 6.5pt, weight: "bold")[CODICE]],
+      table.cell(
+        fill: gray.transparentize(80%),
+        inset: (x: 3mm, y: 1mm),
+      )[#text(size: 6.5pt, weight: "bold")[VOCE]],
+    ),
+    [#text(size: 11pt)[#strong[#item_identification]]],
+    [#text(size: 11pt)[#strong[#upper(item_name)]]],
+  )
+
+  // — Description box —
+  if item_description != "" {
+    v(1mm)
+    block(
+      width: 100%,
+      inset: (x: 2mm, y: 1.5mm),
+      stroke: 0.4pt + gray,
+    )[#text(size: 7pt)[#item_description]]
+  }
+
+  v(3mm)
+
+  // — Rate analysis table —
+  let data = csv(csv_path, row-type: dictionary)
+
+  table(
+    columns: (12mm, 1fr, 20mm, 12mm, 22mm, 22mm),
+    align: (center, left, right, center, right, right),
+    stroke: none,
+    inset: (x: 1.5mm, y: 1.5mm),
+    table.header(
+      text(size: 7pt, weight: "bold")[Cat.],
+      text(size: 7pt, weight: "bold")[Descrizione],
+      text(size: 7pt, weight: "bold")[Qtà],
+      text(size: 7pt, weight: "bold")[U.M.],
+      text(size: 7pt, weight: "bold")[P.U. (#project_currency)],
+      text(size: 7pt, weight: "bold")[Importo (#project_currency)],
+    ),
+    ..data.map(row => arrange_row(row)).flatten(),
+  )
+}
+
+
 #let project(
   csv_path: "",
   item_identification: "",
@@ -162,45 +222,13 @@
 
   set text(font: template_fonts, size: 8pt, lang: "it")
 
-  // — Item header —
-  table(
-    columns: (auto, 1fr),
-    rows: 8mm,
-    stroke: none,
-    inset: 0mm,
-    align: (left + bottom, left + bottom),
-    [#text(size: 11pt)[#strong[#item_identification]]],
-    [#text(size: 11pt)[#strong[#upper(item_name)]]],
+  render_analysis(
+    csv_path: csv_path,
+    item_identification: item_identification,
+    item_name: item_name,
+    item_description: item_description,
+    project_currency: project_currency,
   )
 
-  // — Description box —
-  if item_description != "" {
-    v(1mm)
-    block(
-      width: 100%,
-      inset: (x: 2mm, y: 1.5mm),
-      stroke: 0.4pt + gray,
-    )[#text(size: 7pt)[#item_description]]
-  }
-
-  v(3mm)
-
-  // — Rate analysis table —
-  let data = csv(csv_path, row-type: dictionary)
-
-  table(
-    columns: (12mm, 1fr, 20mm, 12mm, 22mm, 22mm),
-    align: (center, left, right, center, right, right),
-    stroke: none,
-    inset: (x: 1.5mm, y: 1.5mm),
-    table.header(
-      text(size: 7pt, weight: "bold")[Cat.],
-      text(size: 7pt, weight: "bold")[Descrizione],
-      text(size: 7pt, weight: "bold")[Qtà],
-      text(size: 7pt, weight: "bold")[U.M.],
-      text(size: 7pt, weight: "bold")[P.U. (#project_currency)],
-      text(size: 7pt, weight: "bold")[Importo (#project_currency)],
-    ),
-    ..data.map(row => arrange_row(row)).flatten(),
-  )
+  body
 }

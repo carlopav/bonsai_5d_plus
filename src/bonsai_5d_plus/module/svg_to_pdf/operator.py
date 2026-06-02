@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 
 import bpy
 
+from ...tool.cost import ifc_unit_to_str as _ifc_unit_to_str
+
 
 def _open_file(path):
     if sys.platform == "win32":
@@ -424,7 +426,7 @@ def _ra_read_ub(cv):
     try:
         vc = ub.ValueComponent
         qty = float(vc.wrappedValue if hasattr(vc, "wrappedValue") else vc)
-        unit = str(getattr(ub.UnitComponent, "Name", None) or "")
+        unit = _ifc_unit_to_str(ub.UnitComponent)
         return qty, unit
     except Exception:
         return None, None
@@ -447,12 +449,21 @@ def read_rate_analysis_from_ifc(file, cost_item):
     profit_pct   = 0.0
     rounding     = 0.0
     found        = False
+    item_unit    = ""
 
-    for cv in (cost_item.CostValues or []):
+    cost_values = list(cost_item.CostValues or [])
+    # Nested structure: one summary CV with sub-components
+    if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
+        summary_cv = cost_values[0]
+        _, item_unit = _ra_read_ub(summary_cv)
+        item_unit = item_unit if item_unit and item_unit != "1" else ""
+        cost_values = list(summary_cv.Components or [])
+
+    for cv in cost_values:
         cat = cv.Category or ""
         total = _ra_val(cv)
 
-        if cat in _RA_LINE_CATS:
+        if cat in _RA_LINE_CATS or cat not in _RA_ALL_CATS:
             found = True
             qty, unit = _ra_read_ub(cv)
             if qty:
@@ -460,7 +471,7 @@ def read_rate_analysis_from_ifc(file, cost_item):
             else:
                 qty, unit, unit_price = 1.0, "", total
             components.append({
-                'category':    cat,
+                'category':    cat if cat in _RA_LINE_CATS else "",
                 'description': cv.Name or "",
                 'qty':         qty,
                 'unit':        unit or "",
@@ -484,6 +495,7 @@ def read_rate_analysis_from_ifc(file, cost_item):
         'identification': cost_item.Identification or "",
         'name':           cost_item.Name or "",
         'description':    cost_item.Description or "",
+        'unit':           item_unit,
         'components':     components,
         'overhead_pct':   overhead_pct,
         'profit_pct':     profit_pct,
@@ -529,8 +541,8 @@ def build_rate_analysis_csv(data):
     overhead_pct = data['overhead_pct']
     profit_pct   = data['profit_pct']
     rounding     = data['rounding']
-    sg     = ct * overhead_pct / 100.0
-    profit = (ct + sg) * profit_pct / 100.0
+    sg     = round(ct * overhead_pct / 100.0, 2)
+    profit = round((ct + sg) * profit_pct / 100.0, 2)
     final  = ct + sg + profit + rounding
 
     w.writerow(['SUBTOTAL', '', 'Costo tecnico',   '', '', '', f"{ct:.2f}",     ''])
@@ -639,4 +651,126 @@ class ExportRateAnalysisToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportRateAnalysisToPdfOperator]
+class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
+    """Export all Rate Analysis items in the active Cost Schedule to a single PDF."""
+    bl_idname = "bim.export_all_rate_analysis_to_pdf"
+    bl_label = "Export All Rate Analyses to PDF"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def execute(self, context):
+        import tempfile
+        import shutil
+
+        if not _ensure_typst():
+            self.report({"ERROR"}, "typst Python package not found.")
+            return {"CANCELLED"}
+
+        ifc = _get_ifc()
+        ifc_path = _get_ifc_path()
+        if not ifc or not ifc_path:
+            self.report({"ERROR"}, "No IFC file loaded.")
+            return {"CANCELLED"}
+
+        schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+        schedule = ifc.by_id(int(schedule_id))
+
+        ra_items = []
+
+        def _collect(item):
+            if has_rate_analysis(item):
+                data = read_rate_analysis_from_ifc(ifc, item)
+                if data:
+                    ra_items.append(data)
+            for rel in (item.IsNestedBy or []):
+                for child in (rel.RelatedObjects or []):
+                    if child.is_a("IfcCostItem"):
+                        _collect(child)
+
+        for rel in (schedule.Controls or []):
+            for obj in (rel.RelatedObjects or []):
+                if obj.is_a("IfcCostItem"):
+                    _collect(obj)
+
+        if not ra_items:
+            self.report({"WARNING"}, "No rate analysis items found in the active schedule.")
+            return {"CANCELLED"}
+
+        project_currency = ""
+        monetary = ifc.by_type("IfcMonetaryUnit")
+        if monetary:
+            project_currency = monetary[0].Currency or ""
+
+        def _esc(s):
+            return (s or "").replace("\\", "\\\\").replace('"', "'").replace("\n", " ").replace("\r", "")
+
+        safe_sched = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
+        pdf_path = os.path.join(
+            os.path.dirname(os.path.abspath(ifc_path)),
+            f"{safe_sched}_analisi_prezzi.pdf",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(
+                os.path.join(os.path.dirname(__file__), "typst_template_rate_analysis.typ"),
+                tmp,
+            )
+
+            lines = [
+                '#import "typst_template_rate_analysis.typ": render_analysis, template_fonts\n',
+                '#set page(\n',
+                '  paper: "a4",\n',
+                '  margin: (left: 15mm, right: 10mm, top: 20mm, bottom: 20mm),\n',
+                '  numbering: "1/1",\n',
+                '  number-align: end,\n',
+                '  footer: context [\n',
+                '    #set text(font: template_fonts, size: 7pt)\n',
+                '    #grid(columns: (1fr, 1fr), align: (left, right),\n',
+                '      [#datetime.today().display("[day]/[month]/[year]")],\n',
+                '      [#counter(page).display("1/1", both: true)]\n',
+                '    )\n',
+                '  ],\n',
+                ')\n',
+                '#set text(font: template_fonts, size: 8pt, lang: "it")\n\n',
+            ]
+
+            for i, data in enumerate(ra_items):
+                csv_name = f"ra_{i:04d}.csv"
+                with open(os.path.join(tmp, csv_name), "w", encoding="utf-8", newline="") as f:
+                    f.write(build_rate_analysis_csv(data))
+
+                if i > 0:
+                    lines.append('#pagebreak()\n')
+                lines.append('#render_analysis(\n')
+                lines.append(f'  csv_path: "{csv_name}",\n')
+                lines.append(f'  item_identification: "{_esc(data["identification"])}",\n')
+                lines.append(f'  item_name: "{_esc(data["name"])}",\n')
+                lines.append(f'  item_description: "{_esc(data["description"])}",\n')
+                lines.append(f'  project_currency: "{_esc(project_currency)}",\n')
+                lines.append(')\n\n')
+
+            main_path = os.path.join(tmp, "main.typ")
+            with open(main_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+            try:
+                import typst
+                pdf_bytes = typst.compile(main_path)
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes)
+            except Exception as exc:
+                self.report({"ERROR"}, f"PDF generation failed: {exc}")
+                return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Saved {len(ra_items)} analisi: {pdf_path}")
+        _open_file(pdf_path)
+        return {"FINISHED"}
+
+
+classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]

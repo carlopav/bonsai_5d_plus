@@ -14,6 +14,8 @@ from ...tool.cost import (
     get_cost_item_children,
     get_or_create_unit_entity,
     set_unit_basis,
+    ifc_unit_to_str,
+    ifc_quantity_type,
 )
 
 try:
@@ -131,9 +133,16 @@ def _remove_description_text():
 def _get_rate_current_value(file, source_ifc_id):
     try:
         rate_item = file.by_id(source_ifc_id)
-        total = 0.0
-        found = False
-        for cv in (rate_item.CostValues or []):
+        cvs = list(rate_item.CostValues or [])
+        if not cvs:
+            return None
+        # Nested structure: summary CV holds the total directly
+        if len(cvs) == 1 and (getattr(cvs[0], "Components", None) or []):
+            v = cvs[0].AppliedValue
+            return float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else None
+        # Flat structure (legacy / plain EPU): sum all
+        total, found = 0.0, False
+        for cv in cvs:
             if cv.AppliedValue is not None:
                 v = cv.AppliedValue
                 total += float(v.wrappedValue if hasattr(v, "wrappedValue") else v)
@@ -144,10 +153,11 @@ def _get_rate_current_value(file, source_ifc_id):
 
 
 def _get_totals(wm):
-    ct = sum(c.qty * c.unit_price for c in wm.rate_analysis_components)
-    sg = ct * wm.rate_analysis_overhead_pct / 100.0
-    profit = (ct + sg) * wm.rate_analysis_profit_pct / 100.0
-    return ct, sg, profit, ct + sg + profit + wm.rate_analysis_rounding
+    ct     = sum(round(c.qty * c.unit_price, 2) for c in wm.rate_analysis_components)
+    sg     = round(ct * wm.rate_analysis_overhead_pct / 100.0, 2)
+    profit = round((ct + sg) * wm.rate_analysis_profit_pct / 100.0, 2)
+    final  = ct + sg + profit + wm.rate_analysis_rounding
+    return ct, sg, profit, final
 
 
 # unit string → (UnitType, SIName, Prefix|None)  — reuse existing IfcSIUnit
@@ -160,7 +170,7 @@ def _read_unit_basis(cv):
     try:
         vc = ub.ValueComponent
         qty = float(vc.wrappedValue if hasattr(vc, "wrappedValue") else vc)
-        unit_str = str(getattr(ub.UnitComponent, "Name", None) or "")
+        unit_str = ifc_unit_to_str(ub.UnitComponent)
         return qty, unit_str
     except Exception:
         return None, None
@@ -176,7 +186,10 @@ def _parse_pct(name):
 
 
 def _remove_analysis_values(tool, cost_item):
+    file = tool.Ifc.get()
     for cv in list(cost_item.CostValues or []):
+        for sub_cv in list(getattr(cv, "Components", None) or []):
+            file.remove(sub_cv)
         tool.Ifc.run("cost.remove_cost_value", parent=cost_item, cost_value=cv)
 
 
@@ -316,12 +329,21 @@ def _load_cost_item(context, item_id=None):
     wm.rate_analysis_overhead_pct = 0.0
     wm.rate_analysis_profit_pct = 0.0
     wm.rate_analysis_rounding = 0.0
+    wm.rate_analysis_unit = ""
     wm.rate_analysis_target_ifc_id = cost_item.id()
     _read_cost_item_info(context)
 
     found = False
 
-    for cv in (cost_item.CostValues or []):
+    cost_values = list(cost_item.CostValues or [])
+    # Nested structure: one summary CV with sub-components
+    if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
+        summary_cv = cost_values[0]
+        _, unit_str = _read_unit_basis(summary_cv)
+        wm.rate_analysis_unit = unit_str if unit_str and unit_str != "1" else ""
+        cost_values = list(summary_cv.Components or [])
+
+    for cv in cost_values:
         cat = cv.Category or ""
 
         if cat in _LINE_CATEGORIES or cat not in _ALL_PA_CATEGORIES:
@@ -692,6 +714,16 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         _remove_analysis_values(tool, cost_item)
         ct, sg, profit, final = _get_totals(wm)
 
+        def _add_cv(name, category, amount):
+            cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+            tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
+                "Name": name or None,
+                "Category": category or None,
+                "AppliedValue": round(amount, 2),
+            })
+            return cv
+
+        sub_cvs = []
         ordered = sorted(
             wm.rate_analysis_components,
             key=lambda c: _CATEGORY_WRITE_ORDER.index(c.category)
@@ -699,37 +731,28 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         )
         for comp in ordered:
             line_total = round(comp.qty * comp.unit_price, 2)
-            cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-            tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
-                "Name": comp.description,
-                "Category": _TO_IFC.get(comp.category),
-                "AppliedValue": line_total,
-            })
+            cv = _add_cv(comp.description, _TO_IFC.get(comp.category), line_total)
             set_unit_basis(file, cv, comp.qty, comp.unit)
             if comp.source_ifc_id:
                 cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
+            sub_cvs.append(cv)
 
-        cv_sg = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cv_sg, attributes={
-            "Name": _pct_label("Overhead", wm.rate_analysis_overhead_pct),
-            "Category": _OVERHEAD_CAT,
-            "AppliedValue": round(sg, 2),
+        sub_cvs.append(_add_cv(
+            _pct_label("Overhead", wm.rate_analysis_overhead_pct), _OVERHEAD_CAT, sg))
+        sub_cvs.append(_add_cv(
+            _pct_label("Profit", wm.rate_analysis_profit_pct), _PROFIT_CAT, profit))
+        sub_cvs.append(_add_cv("Rounding", _ROUNDING_CAT, wm.rate_analysis_rounding))
+
+        cv_summary = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cv_summary, attributes={
+            "AppliedValue": round(final, 2),
+            "ArithmeticOperator": "ADD",
         })
+        set_unit_basis(file, cv_summary, 1.0, wm.rate_analysis_unit)
 
-        cv_profit = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cv_profit, attributes={
-            "Name": _pct_label("Profit", wm.rate_analysis_profit_pct),
-            "Category": _PROFIT_CAT,
-            "AppliedValue": round(profit, 2),
-        })
-
-        if wm.rate_analysis_rounding != 0.0:
-            cv_r = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-            tool.Ifc.run("cost.edit_cost_value", cost_value=cv_r, attributes={
-                "Name": "Rounding",
-                "Category": _ROUNDING_CAT,
-                "AppliedValue": round(wm.rate_analysis_rounding, 2),
-            })
+        # Restructure: move sub_cvs from CostValues into summary.Components
+        cv_summary.Components = sub_cvs
+        cost_item.CostValues = [cv_summary]
 
         refresh_cost_ui(tool)
 
@@ -944,6 +967,39 @@ class RA_OT_LoadController(*_IfcOperatorBase):
             _load_cost_item(context, item_id=controller.id())
 
 
+class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
+    """Add a zero-value quantity row to mark the item as 'not yet measured'."""
+    bl_idname = "rate_analysis.add_zero_quantity"
+    bl_label = "Add Zero Quantity"
+    bl_description = (
+        "Add a quantity = 0 using the rate analysis unit of measure. "
+        "Prevents the item from contributing to the parent SUM total until measured."
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.window_manager.rate_analysis_target_ifc_id != 0
+
+    def _execute(self, context):
+        from bonsai import tool
+
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        unit_str = wm.rate_analysis_unit or ""
+
+        ifc_class, value_attr = ifc_quantity_type(unit_str)
+        qty_entity = file.create_entity(ifc_class, **{
+            "Name": "Da misurare",
+            value_attr: 0.0,
+        })
+        cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty_entity]
+
+        _load_quantities(context, cost_item)
+        refresh_cost_ui(tool)
+
+
 class QTY_OT_AddRow(bpy.types.Operator):
     bl_idname = "cost_quantities.add_row"
     bl_label = "Add Measurement Row"
@@ -1073,6 +1129,7 @@ classes = [
     RA_OT_AddCostItem,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,
+    RA_OT_AddZeroQuantity,
     QTY_OT_AddRow,
     QTY_OT_RemoveRow,
     QTY_OT_MoveRowUp,

@@ -52,6 +52,31 @@ _UNIT_TO_CONVERSION_DESCRIPTOR = {
 }
 
 
+# Reverse lookups: IFC unit entity → preferred display abbreviation
+_SI_DESCRIPTOR_TO_ABBR = {}
+for _abbr, _desc in _UNIT_TO_SI_DESCRIPTOR.items():
+    if _desc not in _SI_DESCRIPTOR_TO_ABBR:
+        _SI_DESCRIPTOR_TO_ABBR[_desc] = _abbr
+
+_CONVERSION_NAME_TO_ABBR = {}
+for _abbr, (_, _name, *_) in _UNIT_TO_CONVERSION_DESCRIPTOR.items():
+    if _name not in _CONVERSION_NAME_TO_ABBR:
+        _CONVERSION_NAME_TO_ABBR[_name] = _abbr
+
+
+def ifc_unit_to_str(unit_entity):
+    """Return the preferred display abbreviation for an IFC unit entity."""
+    if unit_entity is None:
+        return ""
+    if unit_entity.is_a("IfcSIUnit"):
+        key = (unit_entity.UnitType, unit_entity.Name, unit_entity.Prefix or None)
+        return _SI_DESCRIPTOR_TO_ABBR.get(key, str(unit_entity.Name or ""))
+    if unit_entity.is_a("IfcConversionBasedUnit"):
+        name = (getattr(unit_entity, "Name", None) or "").upper()
+        return _CONVERSION_NAME_TO_ABBR.get(name, str(getattr(unit_entity, "Name", None) or ""))
+    return str(getattr(unit_entity, "Name", None) or "")
+
+
 def _find_si_unit(file, unit_type, si_name, prefix):
     for u in file.by_type("IfcSIUnit"):
         if u.UnitType == unit_type and u.Name == si_name and (u.Prefix or None) == prefix:
@@ -117,10 +142,11 @@ def get_or_create_unit_entity(file, unit_str):
 
 def set_unit_basis(file, cv, qty, unit_str):
     """Set cv.UnitBasis = IfcMeasureWithUnit(qty, unit_entity). Returns True on success."""
-    if not unit_str:
+    if not qty:
         return False
+    effective_unit = unit_str if unit_str else "1"
     try:
-        unit_entity = get_or_create_unit_entity(file, unit_str)
+        unit_entity = get_or_create_unit_entity(file, effective_unit)
         wrapped_qty = file.create_entity("IfcNumericMeasure", qty)
         unit_basis = file.create_entity(
             "IfcMeasureWithUnit",
@@ -186,9 +212,9 @@ _UNIT_TO_IFC_QUANTITY = {
 }
 
 
-def _ifc_quantity_type(unit_str):
-    """Map an XPWE unit string to (IfcClass, value_attribute) for IfcCostItem.CostQuantities."""
-    return _UNIT_TO_IFC_QUANTITY.get(unit_str.lower().strip(), ("IfcQuantityCount", "CountValue"))
+def ifc_quantity_type(unit_str):
+    """Map a unit string to (IfcClass, value_attribute) for IfcCostItem.CostQuantities."""
+    return _UNIT_TO_IFC_QUANTITY.get((unit_str or "").lower().strip(), ("IfcQuantityCount", "CountValue"))
 
 
 # Canonical quantity type info — single source of truth shared across modules.
@@ -239,6 +265,52 @@ def remove_all_cost_values(tool, item):
     """Remove all direct CostValues from item using the Bonsai undo-safe API."""
     for cv in list(item.CostValues or []):
         tool.Ifc.run("cost.remove_cost_value", parent=item, cost_value=cv)
+
+
+# ---------------------------------------------------------------------------
+# Cost value writers
+# ---------------------------------------------------------------------------
+
+def _make_monetary_cv(file, category, amount):
+    return file.create_entity(
+        "IfcCostValue",
+        Category=category or None,
+        AppliedValue=file.create_entity("IfcMonetaryMeasure", round(amount, 2)),
+    )
+
+
+def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
+    """Write a nested IfcCostValue structure for a prezzario/EPU item.
+
+    Creates one summary CostValue (via Bonsai API for undo safety) with
+    AppliedValue = total_value and UnitBasis = (1.0, unit).  If any
+    incidences are non-zero, builds sub-components and assigns them to
+    summary.Components with ArithmeticOperator = ADD.
+
+    incidences: list of (category_str, amount_float), e.g.
+        [("Labor", 30.0), ("Equipment", 0.0), ("Materials", 60.0), ("Safety", 10.0)]
+    """
+    if total_value == 0.0:
+        return
+
+    cv_summary = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+    tool.Ifc.run("cost.edit_cost_value", cost_value=cv_summary,
+                 attributes={"AppliedValue": round(total_value, 2)})
+    set_unit_basis(file, cv_summary, 1.0, unit)
+
+    active = [(cat, amt) for cat, amt in incidences if amt != 0.0]
+    if not active:
+        return
+
+    sub_components = []
+    remaining = round(total_value - sum(amt for _, amt in active), 2)
+    if remaining != 0.0:
+        sub_components.append(_make_monetary_cv(file, None, remaining))
+    for category, amount in active:
+        sub_components.append(_make_monetary_cv(file, category, amount))
+
+    cv_summary.ArithmeticOperator = "ADD"
+    cv_summary.Components = sub_components
 
 
 # ---------------------------------------------------------------------------
@@ -295,41 +367,16 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
         "Description": desc,
     })
 
-    labor = float(rate_attrib["labor"])
-    equipment = float(rate_attrib["equipment"])
-    materials = float(rate_attrib["materials"])
-    safety = float(rate_attrib["safety"])
-    total_value = float(rate_attrib["value"])
-    unit = rate_attrib.get("unit", "")
-
-    components = [
-        ("Labor", labor),
-        ("Equipment", equipment),
-        ("Materials", materials),
-        ("Safety", safety),
-    ]
-    has_components = any(v != 0.0 for _, v in components)
-
-    if not has_components:
-        cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
-                     attributes={"AppliedValue": round(total_value, 2)})
-        set_unit_basis(file, cost_value, 1.0, unit)
-    else:
-        remaining = round(total_value - sum(v for _, v in components), 2)
-        if remaining != 0.0:
-            cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-            tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
-                         attributes={"AppliedValue": remaining})
-            set_unit_basis(file, cost_value, 1.0, unit)
-        for category, amount in components:
-            if amount != 0.0:
-                cost_value = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value, attributes={
-                    "Category": category,
-                    "AppliedValue": round(amount, 2),
-                })
-                set_unit_basis(file, cost_value, 1.0, unit)
+    write_epu_cost_values(file, tool, cost_item,
+        total_value=float(rate_attrib["value"]),
+        unit=rate_attrib.get("unit", ""),
+        incidences=[
+            ("Labor",     float(rate_attrib["labor"])),
+            ("Equipment", float(rate_attrib["equipment"])),
+            ("Materials", float(rate_attrib["materials"])),
+            ("Safety",    float(rate_attrib["safety"])),
+        ],
+    )
 
     _refresh_ui(tool)
 
@@ -396,37 +443,16 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
             })
 
             if not rate["is_parent"]:
-                value = float(rate["value"])
-                unit = rate.get("unit", "")
-                components = [
-                    ("Labor",     float(rate["labor"])),
-                    ("Equipment", float(rate["equipment"])),
-                    ("Materials", float(rate["materials"])),
-                    ("Safety",    float(rate["safety"])),
-                ]
-                has_components = any(v != 0.0 for _, v in components)
-
-                if not has_components:
-                    if value != 0.0:
-                        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                        tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
-                                     attributes={"AppliedValue": round(value, 2)})
-                        set_unit_basis(file, cv, 1.0, unit)
-                else:
-                    remaining = round(value - sum(v for _, v in components), 2)
-                    if remaining != 0.0:
-                        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                        tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
-                                     attributes={"AppliedValue": remaining})
-                        set_unit_basis(file, cv, 1.0, unit)
-                    for category, amount in components:
-                        if amount != 0.0:
-                            cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-                            tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
-                                "Category": category,
-                                "AppliedValue": round(amount, 2),
-                            })
-                            set_unit_basis(file, cv, 1.0, unit)
+                write_epu_cost_values(file, tool, cost_item,
+                    total_value=float(rate["value"]),
+                    unit=rate.get("unit", ""),
+                    incidences=[
+                        ("Labor",     float(rate["labor"])),
+                        ("Equipment", float(rate["equipment"])),
+                        ("Materials", float(rate["materials"])),
+                        ("Safety",    float(rate["safety"])),
+                    ],
+                )
 
             index_to_ifc[rate["index"]] = cost_item
 
@@ -515,7 +541,7 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                                  attributes={"AppliedValue": round(float(rate["value"]), 2)})
 
                 unit = rate.get("unit", "")
-                ifc_class, value_attr = _ifc_quantity_type(unit)
+                ifc_class, value_attr = ifc_quantity_type(unit)
                 rg_items = rate.get("rg_items") or []
                 if import_measurement_rows and rg_items:
                     new_qtys = []
