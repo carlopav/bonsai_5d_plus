@@ -8,6 +8,7 @@ import bpy
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper
 
+from . import data as _data
 from .data import _do_import, _do_import_ifc, _refresh_ifc_schedules_cache, _invalidate_filter_cache
 from ...tool.cost import create_cost_item, refresh_cost_ui
 
@@ -30,22 +31,6 @@ class ImportRateList(Operator, ImportHelper):
         options={"HIDDEN"},
         maxlen=255,
     )
-    chosen_parser: bpy.props.EnumProperty(
-        name="Parser",
-        description="Choose the available parser",
-        items=[
-            ("Auto", "Auto", "Try to guess which importer is more suitable for the given data"),
-            ("RegioneVeneto", "Regione Veneto", "Tooltip"),
-            ("RegioneFriuliVeneziaGiulia", "Regione Friuli Venezia Giulia", "Tooltip"),
-        ],
-        default="RegioneVeneto",
-    )
-
-    def draw(self, context):
-        layout = self.layout
-        box = layout.box()
-        box.label(text="Options:")
-        box.label(text="")
 
     def execute(self, context):
         success = _do_import(self.filepath, context, self.report)
@@ -62,9 +47,9 @@ class UpdateActiveCostItem(*_IfcOperatorBase):
     @classmethod
     def poll(cls, context):
         try:
-            props = bpy.context.scene.BIMCostProperties
+            props = context.scene.BIMCostProperties
             return (
-                len(getattr(bpy.context.scene, "xml_rate_list", [])) > 0
+                len(getattr(context.scene, "xml_rate_list", [])) > 0
                 and props.active_cost_schedule_id != 0
                 and props.active_cost_item is not None
             )
@@ -73,7 +58,7 @@ class UpdateActiveCostItem(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        selected_rate = bpy.context.scene.xml_rate_list[bpy.context.scene.xml_rate_list_active_index]
+        selected_rate = context.scene.xml_rate_list[context.scene.xml_rate_list_active_index]
         file = tool.Ifc.get()
         create_cost_item(file, selected_rate=selected_rate, create_new_item=False,
             combine_desc=context.scene.xml_rate_combine_desc)
@@ -89,9 +74,9 @@ class ImportRateToActiveCostSchedule(*_IfcOperatorBase):
     @classmethod
     def poll(cls, context):
         try:
-            props = bpy.context.scene.BIMCostProperties
+            props = context.scene.BIMCostProperties
             return (
-                len(getattr(bpy.context.scene, "xml_rate_list", [])) > 0
+                len(getattr(context.scene, "xml_rate_list", [])) > 0
                 and props.active_cost_schedule_id != 0
                 and props.active_cost_item is not None
             )
@@ -100,7 +85,7 @@ class ImportRateToActiveCostSchedule(*_IfcOperatorBase):
 
     def _execute(self, context):
         from bonsai import tool
-        selected_rate = bpy.context.scene.xml_rate_list[bpy.context.scene.xml_rate_list_active_index]
+        selected_rate = context.scene.xml_rate_list[context.scene.xml_rate_list_active_index]
         file = tool.Ifc.get()
         create_cost_item(file, selected_rate=selected_rate, create_new_item=True,
             combine_desc=context.scene.xml_rate_combine_desc)
@@ -202,6 +187,118 @@ class IFC_OT_rate_source_refresh(Operator):
         return {"FINISHED"}
 
 
+class LLMSuggestRates(Operator):
+    """Suggest price list items for the typed description using local Ollama LLM."""
+
+    bl_idname = "rate_list.llm_suggest"
+    bl_label = "AI Suggest"
+
+    @classmethod
+    def poll(cls, context):
+        return len(getattr(context.scene, "xml_rate_list", [])) > 0
+
+    def execute(self, context):
+        from ...core import semantic_search as _ss
+        from ...core import llm_search as _llm
+
+        query = context.scene.xml_llm_query.strip()
+        if not query:
+            self.report({'WARNING'}, "Inserisci una descrizione della lavorazione")
+            return {'CANCELLED'}
+
+        if not _llm.is_available():
+            self.report({'ERROR'}, "Ollama non raggiungibile su localhost:11434")
+            return {'CANCELLED'}
+
+        context.scene.xml_llm_status = "Ricerca in corso..."
+        context.scene.xml_llm_results.clear()
+
+        # Step 1: TF-IDF candidates
+        if not _ss.is_ready():
+            self.report({'WARNING'}, "Indicizza prima il prezzario con il pulsante Semantic Search")
+            return {'CANCELLED'}
+
+        tfidf_hits = _ss.search(query, n=_llm.CANDIDATES_N)
+        rate_list  = context.scene.xml_rate_list
+        candidates = []
+        for rate_idx, _ in tfidf_hits:
+            attrib = json.loads(rate_list[rate_idx].attributes)
+            attrib['_rate_idx'] = rate_idx
+            candidates.append(attrib)
+
+        if not candidates:
+            context.scene.xml_llm_status = "Nessun candidato trovato — prova a indicizzare il prezzario"
+            return {'FINISHED'}
+
+        # Step 2: LLM ranking
+        try:
+            results = _llm.suggest(query, candidates)
+        except Exception as e:
+            self.report({'ERROR'}, f"Errore Ollama: {e}")
+            context.scene.xml_llm_status = f"Errore: {e}"
+            return {'CANCELLED'}
+
+        # Build id→rate_idx map
+        id_to_idx = {json.loads(rate_list[c['_rate_idx']].attributes)['id']: c['_rate_idx']
+                     for c in candidates}
+
+        for r in results:
+            item_id = r.get('id', '')
+            rate_idx = id_to_idx.get(item_id)
+            if rate_idx is None:
+                continue
+            item = context.scene.xml_llm_results.add()
+            item.name    = f"{item_id} – {r.get('name', '')}"
+            item.item_id = item_id
+            item.rate_index = rate_idx
+            item.motivo  = r.get('motivo', '')
+
+        if len(context.scene.xml_llm_results) > 0:
+            context.scene.xml_llm_active_index = 0
+            context.scene.xml_rate_list_active_index = context.scene.xml_llm_results[0].rate_index
+            context.scene.xml_llm_status = ""
+        else:
+            context.scene.xml_llm_status = "Nessun risultato pertinente trovato"
+
+        return {'FINISHED'}
+
+
+class LLMConfirmChoice(Operator):
+    """Confirm the selected AI suggestion and save it to the preference store."""
+
+    bl_idname = "rate_list.llm_confirm"
+    bl_label = "Conferma scelta"
+
+    def execute(self, context):
+        from ...core import llm_search as _llm
+        results = context.scene.xml_llm_results
+        idx     = context.scene.xml_llm_active_index
+        if not (0 <= idx < len(results)):
+            return {'CANCELLED'}
+        chosen  = results[idx]
+        query   = context.scene.xml_llm_query.strip()
+        _llm.save_pref(query, chosen.item_id, chosen.name)
+        context.scene.xml_llm_status = f"Salvato: {chosen.item_id}"
+        return {'FINISHED'}
+
+
+class BuildSearchIndex(Operator):
+    """Build the semantic search index for the currently loaded price list."""
+
+    bl_idname = "rate_list.build_search_index"
+    bl_label = "Semantic Search"
+
+    @classmethod
+    def poll(cls, context):
+        return len(getattr(context.scene, "xml_rate_list", [])) > 0
+
+    def execute(self, context):
+        from ...core import semantic_search as _ss
+        rates = [json.loads(item.attributes) for item in context.scene.xml_rate_list]
+        _ss.build_index(rates, key=_data._current_search_key)
+        return {"FINISHED"}
+
+
 classes = [
     ImportRateList,
     UpdateActiveCostItem,
@@ -212,4 +309,7 @@ classes = [
     CUSTOM_OT_collapse_to_level_1,
     CUSTOM_OT_expand_all,
     IFC_OT_rate_source_refresh,
+    BuildSearchIndex,
+    LLMSuggestRates,
+    LLMConfirmChoice,
 ]

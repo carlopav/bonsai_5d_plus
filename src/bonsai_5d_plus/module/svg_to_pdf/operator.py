@@ -723,19 +723,16 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
             )
 
             lines = [
-                '#import "typst_template_rate_analysis.typ": render_analysis, template_fonts\n',
+                '#import "typst_template_rate_analysis.typ": render_analysis, ra-page-header, ra-page-footer, template_fonts\n',
+                '#let _cur-id   = state("_cur-id",   "")\n',
+                '#let _cur-name = state("_cur-name", "")\n',
                 '#set page(\n',
                 '  paper: "a4",\n',
-                '  margin: (left: 15mm, right: 10mm, top: 20mm, bottom: 20mm),\n',
+                '  margin: (left: 15mm, right: 10mm, top: 22mm, bottom: 20mm),\n',
                 '  numbering: "1/1",\n',
                 '  number-align: end,\n',
-                '  footer: context [\n',
-                '    #set text(font: template_fonts, size: 7pt)\n',
-                '    #grid(columns: (1fr, 1fr), align: (left, right),\n',
-                '      [#datetime.today().display("[day]/[month]/[year]")],\n',
-                '      [#counter(page).display("1/1", both: true)]\n',
-                '    )\n',
-                '  ],\n',
+                '  header: context [#ra-page-header(_cur-id.get(), _cur-name.get())],\n',
+                '  footer: ra-page-footer(),\n',
                 ')\n',
                 '#set text(font: template_fonts, size: 8pt, lang: "it")\n\n',
             ]
@@ -747,6 +744,8 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
 
                 if i > 0:
                     lines.append('#pagebreak()\n')
+                lines.append(f'#_cur-id.update("{_esc(data["identification"])}")\n')
+                lines.append(f'#_cur-name.update("{_esc(data["name"])}")\n')
                 lines.append('#render_analysis(\n')
                 lines.append(f'  csv_path: "{csv_name}",\n')
                 lines.append(f'  item_identification: "{_esc(data["identification"])}",\n')
@@ -773,4 +772,435 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]
+# ---------------------------------------------------------------------------
+# Price comparison helpers
+# ---------------------------------------------------------------------------
+
+def _collect_leaf_items(item):
+    """Yield all leaf IfcCostItem descendants (items with no IfcCostItem children)."""
+    children = [
+        obj for rel in (item.IsNestedBy or [])
+        for obj in (rel.RelatedObjects or [])
+        if obj.is_a("IfcCostItem")
+    ]
+    if not children:
+        yield item
+    else:
+        for child in children:
+            yield from _collect_leaf_items(child)
+
+
+def _item_unit_price(item):
+    cvs = list(item.CostValues or [])
+    if not cvs:
+        return None
+    v = cvs[0].AppliedValue
+    return float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else None
+
+
+def _effective_unit_price(item):
+    """Unit price: direct CostValue first, then follow IfcRelAssignsToControl to a rate source."""
+    price = _item_unit_price(item)
+    if price is not None:
+        return price
+    for rel in (item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl"):
+            ctrl = rel.RelatingControl
+            if ctrl.is_a("IfcCostItem"):
+                price = _item_unit_price(ctrl)
+                if price is not None:
+                    return price
+    return None
+
+
+def _item_unit(item):
+    cvs = list(item.CostValues or [])
+    if not cvs:
+        return ""
+    ub = getattr(cvs[0], "UnitBasis", None)
+    if ub is None:
+        return ""
+    u = _ifc_unit_to_str(ub.UnitComponent)
+    return u if u != "1" else ""
+
+
+def _item_quantity(item):
+    total = 0.0
+    for q in (item.CostQuantities or []):
+        for attr in ("AreaValue", "VolumeValue", "LengthValue", "CountValue",
+                     "WeightValue", "TimeValue", "NumberValue"):
+            v = getattr(q, attr, None)
+            if v is not None:
+                total += float(v)
+                break
+    return total
+
+
+def read_boq_comparison(ifc, schedules):
+    """Align leaf items across N schedules for the price comparison table.
+
+    schedules[0] is the base (provides ordering).  All schedules contribute prices.
+    Matching key: normalised (Identification, Name, Description).
+    Items present with the same Identification but differing Name/Description are
+    emitted as separate 'divergent' sub-rows immediately after the 'main' row.
+
+    Returns a list of row dicts:
+      type            'aligned' | 'main' | 'divergent'
+      progressive     int (None for divergent sub-rows)
+      identification  str (blank for divergent sub-rows)
+      name            str
+      unit            str
+      quantity        float
+      unit_prices     [float|None, ...]  one entry per schedule
+    """
+
+    def _norm(s):
+        return (s or "").strip().lower()
+
+    # Build per-schedule index: identification → list of entry dicts
+    sched_data = []
+    for sched in schedules:
+        data = {}
+        for rel in (sched.Controls or []):
+            for root in (rel.RelatedObjects or []):
+                if root.is_a("IfcCostItem"):
+                    for leaf in _collect_leaf_items(root):
+                        ident = (leaf.Identification or "").strip()
+                        entry = {
+                            'name':        (leaf.Name or "").strip(),
+                            'description': (leaf.Description or "").strip(),
+                            'unit':        _item_unit(leaf),
+                            'quantity':    _item_quantity(leaf),
+                            'price':       _effective_unit_price(leaf),
+                        }
+                        data.setdefault(ident, []).append(entry)
+        sched_data.append(data)
+
+    # Ordered list of identifications: base schedule first, then others
+    seen = set()
+    idents_ordered = []
+    for rel in (schedules[0].Controls or []):
+        for root in (rel.RelatedObjects or []):
+            if root.is_a("IfcCostItem"):
+                for leaf in _collect_leaf_items(root):
+                    ident = (leaf.Identification or "").strip()
+                    if ident not in seen:
+                        seen.add(ident)
+                        idents_ordered.append(ident)
+    for si in range(1, len(schedules)):
+        for ident in sched_data[si]:
+            if ident not in seen:
+                seen.add(ident)
+                idents_ordered.append(ident)
+
+    rows = []
+    progressive = 0
+
+    for ident in idents_ordered:
+        # Collect unique (norm_name, norm_desc) variants across all schedules
+        variants = {}  # (norm_name, norm_desc) → {display_name, display_desc, {si: entry}}
+        for si, data in enumerate(sched_data):
+            for entry in data.get(ident, []):
+                key = (_norm(entry['name']), _norm(entry['description']))
+                if key not in variants:
+                    variants[key] = {
+                        'display_name': entry['name'],
+                        'display_desc': entry['description'],
+                        'by_sched':     {},
+                    }
+                variants[key]['by_sched'][si] = entry
+
+        # Sort: base schedule variant first
+        sorted_variants = sorted(
+            variants.items(),
+            key=lambda kv: 0 if 0 in kv[1]['by_sched'] else 1,
+        )
+
+        n_variants = len(sorted_variants)
+        is_first = True
+
+        for (norm_name, norm_desc), vinfo in sorted_variants:
+            prices = []
+            unit = ""
+            quantity = 0.0
+            for si in range(len(schedules)):
+                entry = vinfo['by_sched'].get(si)
+                if entry:
+                    prices.append(entry['price'])
+                    if not unit:
+                        unit = entry['unit']
+                    if not quantity:
+                        quantity = entry['quantity']
+                else:
+                    prices.append(None)
+
+            if is_first:
+                progressive += 1
+                row_type = 'aligned' if n_variants == 1 else 'main'
+            else:
+                row_type = 'divergent'
+
+            rows.append({
+                'type':           row_type,
+                'progressive':    progressive if is_first else None,
+                'identification': ident if is_first else "",
+                'name':           vinfo['display_name'],
+                'unit':           unit,
+                'quantity':       quantity,
+                'unit_prices':    prices,
+            })
+            is_first = False
+
+    return rows
+
+
+def _build_price_comparison_typst(base_name, schedule_names, rows, currency):
+    """Generate a complete Typst document for the price comparison table.
+
+    schedule_names: names of ALL schedules (base first).
+    rows: output of read_boq_comparison().
+    """
+
+    def _te(s):
+        return (s or "").replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("#", "\\#")
+
+    n = len(schedule_names)
+    # Fixed cols: N(7) Codice(28) Desc(1fr) UM(10) Qty(18); per schedule: PU(20) Tot(25)
+    col_defs = "7mm, 28mm, 1fr, 10mm, 18mm" + (", 20mm, 25mm" * n)
+
+    # Registro-style stroke: heavier frame, thin interior verticals
+    stroke_decl = (
+        "  stroke: (x, y) => ("
+        "left: if x == 0 { 1pt } else { 0.25pt }, "
+        "right: 1pt, top: 0.5pt, bottom: 0.5pt),"
+    )
+
+    # Header row 1: 5 fixed cells (rowspan 2) + n schedule name cells (colspan 2)
+    h1_fill = "gray.transparentize(75%)"
+    h1 = (
+        f"    table.cell(rowspan: 2, align: center + horizon, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[N.]],\n"
+        f"    table.cell(rowspan: 2, align: center + horizon, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[Codice]],\n"
+        f"    table.cell(rowspan: 2, align: center + horizon, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[Descrizione]],\n"
+        f"    table.cell(rowspan: 2, align: center + horizon, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[U.M.]],\n"
+        f"    table.cell(rowspan: 2, align: right + horizon, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[Qtà]],\n"
+    )
+    for name in schedule_names:
+        h1 += f"    table.cell(colspan: 2, align: center, fill: {h1_fill})[#text(size: 7pt, weight: \"bold\")[{_te(name)}]],\n"
+
+    # Header row 2: PU + Totale subheadings
+    h2_fill = "gray.transparentize(88%)"
+    h2 = ""
+    for _ in schedule_names:
+        h2 += f"    table.cell(align: right, fill: {h2_fill})[#text(size: 6.5pt)[P.U.]],\n"
+        h2 += f"    table.cell(align: right, fill: {h2_fill})[#text(size: 6.5pt)[Totale]],\n"
+
+    # Data rows
+    data_rows = ""
+    for row in rows:
+        is_div  = row['type'] == 'divergent'
+        fill    = "fill: gray.transparentize(93%), " if is_div else ""
+        txt     = "#text(size: 7pt, style: \"italic\")" if is_div else "#text(size: 7pt)"
+
+        prog    = str(row['progressive']) if row['progressive'] is not None else ""
+        qty     = row['quantity']
+        qty_str = f"{qty:g}" if qty else "—"
+
+        r = (
+            f"  table.cell(align: center, {fill})[{txt}[{_te(prog)}]],\n"
+            f"  table.cell({fill})[{txt}[{_te(row['identification'])}]],\n"
+            f"  table.cell({fill})[{txt}[{_te(row['name'])}]],\n"
+            f"  table.cell(align: center, {fill})[{txt}[{_te(row['unit'])}]],\n"
+            f"  table.cell(align: right, {fill})[{txt}[{qty_str}]],\n"
+        )
+        for price in row['unit_prices']:
+            if price is not None:
+                total = price * qty if qty else 0.0
+                r += f"  table.cell(align: right, {fill})[{txt}[{price:.2f}]],\n"
+                r += f"  table.cell(align: right, {fill})[{txt}[{total:.2f}]],\n"
+            else:
+                r += f"  table.cell(align: center, {fill})[—],\n"
+                r += f"  table.cell(align: center, {fill})[—],\n"
+        data_rows += r + "\n"
+
+    # Totals row — exclude divergent sub-rows to avoid double counting
+    tot_fill = "gray.transparentize(75%)"
+    totals = f"  table.cell(colspan: 5, align: right, fill: {tot_fill})[#strong[Totale]],\n"
+    for si in range(n):
+        s = sum(
+            (row['unit_prices'][si] or 0.0) * row['quantity']
+            for row in rows
+            if row['type'] != 'divergent' and row['unit_prices'][si] is not None
+        )
+        totals += f"  table.cell(colspan: 2, align: right, fill: {tot_fill})[#strong[{s:.2f}]],\n"
+
+    cur = _te(currency) or "EUR"
+    return f"""#import "typst_template_rate_analysis.typ": template_fonts, ra-page-footer, _stroke_heavy, _stroke_border
+
+#set page(
+  paper: "a4",
+  flipped: true,
+  margin: (x: 15mm, top: 20mm, bottom: 20mm),
+  numbering: "1/1",
+  number-align: end,
+  header: [
+    #set text(font: template_fonts, size: 7pt, lang: "it")
+    #text(weight: "bold")[QUADRO DI RAFFRONTO PREZZI] #h(1fr) Base: {_te(base_name)}
+    #v(-0.5mm)
+    #line(length: 100%, stroke: _stroke_heavy)
+  ],
+  footer: ra-page-footer(),
+)
+#set text(font: template_fonts, size: 8pt, lang: "it")
+
+#table(
+  columns: ({col_defs}),
+{stroke_decl}
+  inset: (x: 1.5mm, y: 1.5mm),
+  table.header(
+{h1}
+{h2}
+  ),
+{data_rows}
+{totals}
+)
+"""
+
+
+class COMP_OT_RefreshSchedules(bpy.types.Operator):
+    """Refresh the schedule list from the current IFC project."""
+    bl_idname = "comparison.refresh_schedules"
+    bl_label = "Refresh Schedules"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return _get_ifc() is not None
+
+    def execute(self, context):
+        ifc = _get_ifc()
+        wm = context.window_manager
+        wm.comparison_schedules.clear()
+
+        schedules = list(ifc.by_type("IfcCostSchedule"))
+        # Auto-detect base: prefer first BoQ
+        base_id = None
+        for s in schedules:
+            if s.PredefinedType in ("PRICEDBILLOFQUANTITIES", "UNPRICEDBILLOFQUANTITIES"):
+                base_id = s.id()
+                break
+
+        for s in schedules:
+            item = wm.comparison_schedules.add()
+            item.schedule_id = s.id()
+            item.name = s.Name or f"#{s.id()}"
+            item.predefined_type = s.PredefinedType or ""
+            item.is_base = (s.id() == base_id)
+            item.enabled = True
+
+        self.report({"INFO"}, f"{len(schedules)} schedule(s) found.")
+        return {"FINISHED"}
+
+
+class COMP_OT_SetBase(bpy.types.Operator):
+    """Set this schedule as the base (provides quantities)."""
+    bl_idname = "comparison.set_base"
+    bl_label = "Set as Base"
+    bl_options = {"REGISTER"}
+
+    schedule_id: bpy.props.IntProperty(options={"SKIP_SAVE"})
+
+    def execute(self, context):
+        for item in context.window_manager.comparison_schedules:
+            item.is_base = (item.schedule_id == self.schedule_id)
+        return {"FINISHED"}
+
+
+class COMP_OT_ExportPriceComparison(bpy.types.Operator):
+    """Export a price comparison table to PDF (landscape A4)."""
+    bl_idname = "comparison.export_price_comparison"
+    bl_label = "Export Price Comparison to PDF"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        wm = context.window_manager
+        schedules = wm.comparison_schedules
+        has_base = any(s.is_base for s in schedules)
+        has_comp = any(s.enabled and not s.is_base for s in schedules)
+        return has_base and has_comp
+
+    def execute(self, context):
+        import tempfile
+        import shutil
+
+        if not _ensure_typst():
+            self.report({"ERROR"}, "typst Python package not found.")
+            return {"CANCELLED"}
+
+        ifc = _get_ifc()
+        ifc_path = _get_ifc_path()
+        if not ifc or not ifc_path:
+            self.report({"ERROR"}, "No IFC file loaded.")
+            return {"CANCELLED"}
+
+        wm = context.window_manager
+        base_entry = next((s for s in wm.comparison_schedules if s.is_base), None)
+        if not base_entry:
+            self.report({"ERROR"}, "Select a base schedule.")
+            return {"CANCELLED"}
+
+        # All enabled schedules: base first, then the rest in list order
+        ordered_entries = [base_entry] + [
+            s for s in wm.comparison_schedules if s.enabled and not s.is_base
+        ]
+        if len(ordered_entries) < 2:
+            self.report({"ERROR"}, "Enable at least one comparison schedule.")
+            return {"CANCELLED"}
+
+        schedules      = [ifc.by_id(e.schedule_id) for e in ordered_entries]
+        schedule_names = [e.name for e in ordered_entries]
+
+        rows = read_boq_comparison(ifc, schedules)
+        if not rows:
+            self.report({"WARNING"}, "No items found in base schedule.")
+            return {"CANCELLED"}
+
+        currency = ""
+        monetary = ifc.by_type("IfcMonetaryUnit")
+        if monetary:
+            currency = monetary[0].Currency or ""
+
+        typ_content = _build_price_comparison_typst(
+            base_name=base_entry.name,
+            schedule_names=schedule_names,
+            rows=rows,
+            currency=currency,
+        )
+
+        safe = (base_entry.name).replace("/", "_").replace("\\", "_")
+        pdf_path = os.path.join(
+            os.path.dirname(os.path.abspath(ifc_path)),
+            f"{safe}_raffronto_prezzi.pdf",
+        )
+
+        template_src = os.path.join(os.path.dirname(__file__), "typst_template_rate_analysis.typ")
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(template_src, tmp)
+            main_path = os.path.join(tmp, "main.typ")
+            with open(main_path, "w", encoding="utf-8") as f:
+                f.write(typ_content)
+            try:
+                import typst
+                pdf_bytes = typst.compile(main_path)
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes)
+            except Exception as exc:
+                self.report({"ERROR"}, f"PDF generation failed: {exc}")
+                return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Saved: {pdf_path}")
+        _open_file(pdf_path)
+        return {"FINISHED"}
+
+
+classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator, COMP_OT_RefreshSchedules, COMP_OT_SetBase, COMP_OT_ExportPriceComparison]

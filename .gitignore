@@ -12,3 +12,6 @@ dist/
 
 # Stale zip in src/
 src/*.zip
+
+# Vendored Python libs (numpy/scipy/sklearn, ~226 MB) - not committed
+src/bonsai_5d_plus/_libs/

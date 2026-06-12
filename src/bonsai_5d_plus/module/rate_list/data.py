@@ -16,6 +16,7 @@ from ...core.parsers import PriceListParser, ParserIfcCostSchedule, _find_xml_pa
 _recent_cache = []   # prevents GC of enum item strings
 _importing = False   # guard against recursive import on xml_rate_recent_path update
 _ifc_schedules_cache = []
+_current_search_key = None  # key of the currently loaded price list, for the index operator
 
 # Replaces RateListPanel.active_item_info (class var) — accessed by ui.py
 active_item_info = "no item selected"
@@ -134,6 +135,41 @@ def _on_source_mode_change(self, context):
 
 # Rate list population ────────────────────────────────────────────────────────
 
+def _on_search_query_change(self, context):
+    import json
+    from ...core import semantic_search as _ss
+    if not _ss.is_ready():
+        return
+    query = self.xml_rate_search_query.strip()
+    context.scene.xml_rate_search_results.clear()
+    if not query:
+        return
+    results = _ss.search(query, n=10)
+    rate_list = context.scene.xml_rate_list
+    for rate_idx, score in results:
+        item = context.scene.xml_rate_search_results.add()
+        attrib = json.loads(rate_list[rate_idx].attributes)
+        item.name = f"[{score:.0%}] {attrib['id']} – {attrib['name']}"
+        item.rate_index = rate_idx
+        item.score = score
+    if len(context.scene.xml_rate_search_results) > 0:
+        context.scene.xml_rate_search_active_index = 0
+
+
+def _on_llm_result_select(self, context):
+    results = context.scene.xml_llm_results
+    idx = context.scene.xml_llm_active_index
+    if 0 <= idx < len(results):
+        context.scene.xml_rate_list_active_index = results[idx].rate_index
+
+
+def _on_search_result_select(self, context):
+    results = context.scene.xml_rate_search_results
+    idx = context.scene.xml_rate_search_active_index
+    if 0 <= idx < len(results):
+        context.scene.xml_rate_list_active_index = results[idx].rate_index
+
+
 def _on_rate_selection_change(self, context):
     """Called when xml_rate_list_active_index changes — updates active_item_info."""
     global active_item_info
@@ -159,7 +195,9 @@ def _on_rate_selection_change(self, context):
         pass
 
 
-def _populate_list_from_parser(parser, context):
+def _populate_list_from_parser(parser, context, key=None):
+    global _current_search_key
+    _current_search_key = key
     _invalidate_filter_cache()
     context.scene.xml_rate_title = parser.title
     context.scene.xml_rate_year = parser.year
@@ -189,6 +227,9 @@ def _populate_list_from_parser(parser, context):
     if len(context.scene.xml_rate_list) > 0:
         context.scene.xml_rate_list_active_index = 0
 
+    from ...core import semantic_search as _ss
+    _ss.try_activate_cached(key)
+
 
 def _do_import(filepath, context, report=None):
     import re
@@ -208,7 +249,7 @@ def _do_import(filepath, context, report=None):
     parser.year = match.group(1) if match else ""
     parser.title = name
 
-    _populate_list_from_parser(parser, context)
+    _populate_list_from_parser(parser, context, key=filepath)
 
     _save_recent(filepath, parser.title, parser.year)
     _refresh_recent_cache()
@@ -236,5 +277,5 @@ def _do_import_ifc(schedule_id, context, report=None):
 
     parser = ParserIfcCostSchedule()
     parser.parse_schedule(file, schedule_id)
-    _populate_list_from_parser(parser, context)
+    _populate_list_from_parser(parser, context, key=f"ifc:{schedule_id}")
     return True
