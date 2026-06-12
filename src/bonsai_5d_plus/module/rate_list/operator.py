@@ -187,116 +187,108 @@ class IFC_OT_rate_source_refresh(Operator):
         return {"FINISHED"}
 
 
-class LLMSuggestRates(Operator):
-    """Suggest price list items for the typed description using local Ollama LLM."""
-
-    bl_idname = "rate_list.llm_suggest"
-    bl_label = "AI Suggest"
-
-    @classmethod
-    def poll(cls, context):
-        return len(getattr(context.scene, "xml_rate_list", [])) > 0
-
-    def execute(self, context):
-        from ...core import semantic_search as _ss
-        from ...core import llm_search as _llm
-
-        query = context.scene.xml_llm_query.strip()
-        if not query:
-            self.report({'WARNING'}, "Inserisci una descrizione della lavorazione")
-            return {'CANCELLED'}
-
-        if not _llm.is_available():
-            self.report({'ERROR'}, "Ollama non raggiungibile su localhost:11434")
-            return {'CANCELLED'}
-
-        context.scene.xml_llm_status = "Ricerca in corso..."
-        context.scene.xml_llm_results.clear()
-
-        # Step 1: TF-IDF candidates
-        if not _ss.is_ready():
-            self.report({'WARNING'}, "Indicizza prima il prezzario con il pulsante Semantic Search")
-            return {'CANCELLED'}
-
-        tfidf_hits = _ss.search(query, n=_llm.CANDIDATES_N)
-        rate_list  = context.scene.xml_rate_list
-        candidates = []
-        for rate_idx, _ in tfidf_hits:
-            attrib = json.loads(rate_list[rate_idx].attributes)
-            attrib['_rate_idx'] = rate_idx
-            candidates.append(attrib)
-
-        if not candidates:
-            context.scene.xml_llm_status = "Nessun candidato trovato — prova a indicizzare il prezzario"
-            return {'FINISHED'}
-
-        # Step 2: LLM ranking
-        try:
-            results = _llm.suggest(query, candidates)
-        except Exception as e:
-            self.report({'ERROR'}, f"Errore Ollama: {e}")
-            context.scene.xml_llm_status = f"Errore: {e}"
-            return {'CANCELLED'}
-
-        # Build id→rate_idx map
-        id_to_idx = {json.loads(rate_list[c['_rate_idx']].attributes)['id']: c['_rate_idx']
-                     for c in candidates}
-
-        for r in results:
-            item_id = r.get('id', '')
-            rate_idx = id_to_idx.get(item_id)
-            if rate_idx is None:
-                continue
-            item = context.scene.xml_llm_results.add()
-            item.name    = f"{item_id} – {r.get('name', '')}"
-            item.item_id = item_id
-            item.rate_index = rate_idx
-            item.motivo  = r.get('motivo', '')
-
-        if len(context.scene.xml_llm_results) > 0:
-            context.scene.xml_llm_active_index = 0
-            context.scene.xml_rate_list_active_index = context.scene.xml_llm_results[0].rate_index
-            context.scene.xml_llm_status = ""
-        else:
-            context.scene.xml_llm_status = "Nessun risultato pertinente trovato"
-
-        return {'FINISHED'}
+def _fmt_duration(seconds):
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
 
 
-class LLMConfirmChoice(Operator):
-    """Confirm the selected AI suggestion and save it to the preference store."""
-
-    bl_idname = "rate_list.llm_confirm"
-    bl_label = "Conferma scelta"
-
-    def execute(self, context):
-        from ...core import llm_search as _llm
-        results = context.scene.xml_llm_results
-        idx     = context.scene.xml_llm_active_index
-        if not (0 <= idx < len(results)):
-            return {'CANCELLED'}
-        chosen  = results[idx]
-        query   = context.scene.xml_llm_query.strip()
-        _llm.save_pref(query, chosen.item_id, chosen.name)
-        context.scene.xml_llm_status = f"Salvato: {chosen.item_id}"
-        return {'FINISHED'}
+def _notify_popup(context, message, icon='CHECKMARK'):
+    def draw(menu, _ctx):
+        menu.layout.label(text=message)
+    context.window_manager.popup_menu(draw, title="Ricerca semantica", icon=icon)
 
 
 class BuildSearchIndex(Operator):
-    """Build the semantic search index for the currently loaded price list."""
+    """Build the search indexes for the currently loaded price list.
+
+    The lexical (BM25) index is instant. The embedding index needs Ollama
+    with the bge-m3 model ('ollama pull bge-m3'); it is built in the
+    background while Blender stays usable (ESC to cancel) and cached on disk"""
 
     bl_idname = "rate_list.build_search_index"
     bl_label = "Semantic Search"
 
+    _timer = None
+    _job = None
+
     @classmethod
     def poll(cls, context):
         return len(getattr(context.scene, "xml_rate_list", [])) > 0
 
     def execute(self, context):
         from ...core import semantic_search as _ss
+        from ...core import embedding_search as _es
+
+        if _es.active_job() is not None:
+            self.report({'WARNING'}, "Indicizzazione già in corso")
+            return {'CANCELLED'}
+
         rates = [json.loads(item.attributes) for item in context.scene.xml_rate_list]
         _ss.build_index(rates, key=_data._current_search_key)
-        return {"FINISHED"}
+
+        if not _es.is_available():
+            self.report(
+                {'INFO'},
+                "Indice lessicale creato. Per la ricerca semantica avvia Ollama, "
+                "esegui 'ollama pull bge-m3' e ripremi il pulsante",
+            )
+            return {'FINISHED'}
+
+        self._job = _es.build_index_async(rates, key=_data._current_search_key)
+        if self._job is None:
+            self.report({'WARNING'}, "Impossibile avviare l'indicizzazione embeddings")
+            return {'FINISHED'}
+
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        job = self._job
+
+        if event.type == 'ESC' and not job.finished:
+            job.cancel()
+            return {'PASS_THROUGH'}  # keep waiting for the worker to stop
+
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        if not job.finished:
+            pct = job.done * 100 // job.total if job.total else 0
+            eta = job.eta
+            text = (
+                f"Indicizzazione embeddings: {job.done}/{job.total} ({pct}%) — "
+                f"trascorso {_fmt_duration(job.elapsed)}"
+            )
+            if eta is not None:
+                text += f", restano ~{_fmt_duration(eta)}"
+            text += " — ESC per annullare"
+            context.workspace.status_text_set(text)
+            _data._redraw_view3d_ui()
+            return {'PASS_THROUGH'}
+
+        # Worker finished (success, error or cancelled)
+        self._cleanup(context)
+        _data._redraw_view3d_ui()
+        if job.error:
+            self.report({'WARNING'}, f"Indice embeddings non creato: {job.error}")
+            _notify_popup(context, f"Errore: {job.error}", icon='ERROR')
+            return {'CANCELLED'}
+        if job.cancelled:
+            self.report({'INFO'}, "Indicizzazione annullata")
+            _notify_popup(context, "Indicizzazione annullata", icon='CANCEL')
+            return {'CANCELLED'}
+        msg = f"Indice creato in {_fmt_duration(job.elapsed)} ({job.total} voci)"
+        self.report({'INFO'}, msg)
+        _notify_popup(context, msg)
+        return {'FINISHED'}
+
+    def _cleanup(self, context):
+        context.workspace.status_text_set(None)
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
 
 
 classes = [
@@ -310,6 +302,4 @@ classes = [
     CUSTOM_OT_expand_all,
     IFC_OT_rate_source_refresh,
     BuildSearchIndex,
-    LLMSuggestRates,
-    LLMConfirmChoice,
 ]

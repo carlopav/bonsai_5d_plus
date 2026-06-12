@@ -18,8 +18,6 @@ from .operator import (
     CUSTOM_OT_expand_all,
     IFC_OT_rate_source_refresh,
     BuildSearchIndex,
-    LLMSuggestRates,
-    LLMConfirmChoice,
 )
 
 
@@ -146,9 +144,24 @@ class RateListPanel(bpy.types.Panel):
         )
 
         from ...core import semantic_search as _ss
+        from ...core import embedding_search as _es
         if len(context.scene.xml_rate_list) > 0:
-            if _ss.is_ready():
-                layout.prop(context.scene, "xml_rate_search_query", text="Semantic search:", icon="VIEWZOOM")
+            job = _es.active_job()
+            if job is not None:
+                eta = job.eta
+                text = f"Indicizzazione {job.done}/{job.total}"
+                if eta is not None:
+                    text += f" — restano ~{int(eta) // 60}:{int(eta) % 60:02d}"
+                layout.progress(
+                    factor=job.done / job.total if job.total else 0.0,
+                    type='BAR', text=text,
+                )
+            if _ss.is_ready() or _es.is_ready():
+                row = layout.row(align=True)
+                row.prop(context.scene, "xml_rate_search_query", text="Semantic search:", icon="VIEWZOOM")
+                if not _es.is_ready() and job is None:
+                    # Embedding index missing — offer to build it (needs Ollama + bge-m3)
+                    row.operator(BuildSearchIndex.bl_idname, text="", icon="SHADERFX")
                 results = context.scene.xml_rate_search_results
                 if len(results) > 0:
                     layout.template_list(
@@ -157,7 +170,7 @@ class RateListPanel(bpy.types.Panel):
                         context.scene, "xml_rate_search_active_index",
                         rows=5,
                     )
-            else:
+            elif job is None:
                 layout.operator(BuildSearchIndex.bl_idname, icon="SORTTIME")
 
         box = layout.box()
@@ -195,52 +208,4 @@ class RATE_UL_search_results(bpy.types.UIList):
         layout.label(text=item.name)
 
 
-class RATE_UL_llm_results(bpy.types.UIList):
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        col = layout.column()
-        col.label(text=item.name)
-        if item.motivo:
-            sub = col.row()
-            sub.enabled = False
-            sub.label(text=item.motivo)
-
-
-class AISearchSubPanel(bpy.types.Panel):
-    bl_label = "AI Rate Search"
-    bl_idname = "SCENE_PT_ai_rate_search"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Bonsai5D+"
-    bl_parent_id = "SCENE_PT_xml_rate_list"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        from ...core import llm_search as _llm
-        layout = self.layout
-
-        if not len(context.scene.xml_rate_list):
-            layout.label(text="Carica un prezzario per usare l'AI", icon="INFO")
-            return
-
-        row = layout.row(align=True)
-        row.prop(context.scene, "xml_llm_query", text="", icon="OUTLINER_DATA_FONT")
-        row.operator(LLMSuggestRates.bl_idname, text="", icon="SHADERFX")
-
-        status = context.scene.xml_llm_status
-        if status:
-            layout.label(text=status, icon="INFO")
-
-        results = context.scene.xml_llm_results
-        if len(results) > 0:
-            layout.template_list(
-                "RATE_UL_llm_results", "",
-                context.scene, "xml_llm_results",
-                context.scene, "xml_llm_active_index",
-                rows=3,
-            )
-            row = layout.row()
-            row.operator(LLMConfirmChoice.bl_idname, icon="CHECKMARK")
-
-
-classes = [RATE_UL_xml_list, RateListPanel, RATE_UL_search_results,
-           RATE_UL_llm_results, AISearchSubPanel]
+classes = [RATE_UL_xml_list, RateListPanel, RATE_UL_search_results]

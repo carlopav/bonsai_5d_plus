@@ -6,6 +6,7 @@
 import os
 import json
 import textwrap
+import time
 import bpy
 
 from ...core.parsers import PriceListParser, ParserIfcCostSchedule, _find_xml_parser
@@ -135,32 +136,77 @@ def _on_source_mode_change(self, context):
 
 # Rate list population ────────────────────────────────────────────────────────
 
-def _on_search_query_change(self, context):
-    import json
-    from ...core import semantic_search as _ss
-    if not _ss.is_ready():
+def _set_search_results(scene, results, normalize=False):
+    scene.xml_rate_search_results.clear()
+    if not results:
         return
-    query = self.xml_rate_search_query.strip()
-    context.scene.xml_rate_search_results.clear()
-    if not query:
-        return
-    results = _ss.search(query, n=10)
-    rate_list = context.scene.xml_rate_list
+    best = results[0][1] or 1.0
+    rate_list = scene.xml_rate_list
     for rate_idx, score in results:
-        item = context.scene.xml_rate_search_results.add()
+        if normalize:
+            score = score / best
+        item = scene.xml_rate_search_results.add()
         attrib = json.loads(rate_list[rate_idx].attributes)
         item.name = f"[{score:.0%}] {attrib['id']} – {attrib['name']}"
         item.rate_index = rate_idx
         item.score = score
-    if len(context.scene.xml_rate_search_results) > 0:
-        context.scene.xml_rate_search_active_index = 0
+    scene.xml_rate_search_active_index = 0
 
 
-def _on_llm_result_select(self, context):
-    results = context.scene.xml_llm_results
-    idx = context.scene.xml_llm_active_index
-    if 0 <= idx < len(results):
-        context.scene.xml_rate_list_active_index = results[idx].rate_index
+def _on_search_query_change(self, context):
+    from ...core import semantic_search as _ss
+    from ...core import embedding_search as _es
+    if not (_ss.is_ready() or _es.is_ready()):
+        return
+    query = self.xml_rate_search_query.strip()
+    if not query:
+        context.scene.xml_rate_search_results.clear()
+        return
+    # Instant lexical results while typing; the embedding pass is debounced
+    # because each query embedding is an HTTP round-trip to Ollama.
+    if _ss.is_ready():
+        _set_search_results(context.scene, _ss.search(query, n=10), normalize=True)
+    if _es.is_ready():
+        _schedule_hybrid_search(query)
+
+
+# Hybrid search debounce ──────────────────────────────────────────────────────
+
+_hybrid_last_edit = 0.0
+_hybrid_query = ""
+_HYBRID_DEBOUNCE = 0.35  # seconds after the last keystroke
+
+
+def _schedule_hybrid_search(query):
+    global _hybrid_last_edit, _hybrid_query
+    _hybrid_last_edit = time.monotonic()
+    _hybrid_query = query
+    if not bpy.app.timers.is_registered(_hybrid_search_timer):
+        bpy.app.timers.register(_hybrid_search_timer, first_interval=_HYBRID_DEBOUNCE)
+
+
+def _hybrid_search_timer():
+    from ...core import embedding_search as _es
+    remaining = _HYBRID_DEBOUNCE - (time.monotonic() - _hybrid_last_edit)
+    if remaining > 0.0:
+        return remaining
+    scene = bpy.context.scene
+    if scene.xml_rate_search_query.strip() != _hybrid_query:
+        return None
+    results = _es.search_hybrid(_hybrid_query, n=10)
+    if results:
+        _set_search_results(scene, results)
+        _redraw_view3d_ui()
+    return None
+
+
+def _redraw_view3d_ui():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                for region in area.regions:
+                    if region.type == 'UI':
+                        region.tag_redraw()
 
 
 def _on_search_result_select(self, context):
@@ -228,7 +274,9 @@ def _populate_list_from_parser(parser, context, key=None):
         context.scene.xml_rate_list_active_index = 0
 
     from ...core import semantic_search as _ss
+    from ...core import embedding_search as _es
     _ss.try_activate_cached(key)
+    _es.try_activate_cached(key)
 
 
 def _do_import(filepath, context, report=None):
