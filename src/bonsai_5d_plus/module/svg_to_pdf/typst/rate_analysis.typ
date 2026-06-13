@@ -1,8 +1,11 @@
-// Rate Analysis Sheet Template (Scheda Analisi Prezzi)
+// Scheda Analisi Prezzi (Rate Analysis)
+// One sheet per cost item: cost components grouped by category, with
+// overheads, profit and rounding, ending in the final unit price.
+//
 // author: carlo pavan
 // year: 2026
 
-#let template_fonts = ("Liberation Sans", "Roboto", "Arial", "Calibri")
+#import "common.typ": *
 
 #let category_abbr = (
   "Sub-Contract": "OPC",
@@ -11,24 +14,6 @@
   "Material":     "MAT",
   "Safety":       "SIC",
 )
-
-#let format-decimal(num, places: 2) = {
-  let rounded = calc.round(float(num), digits: places)
-  let str-num = str(rounded)
-  let parts = str-num.split(".")
-  let integer-part = parts.at(0)
-  let decimal-part = parts.at(1, default: "")
-  let is-negative = integer-part.starts-with("-")
-  if is-negative { integer-part = integer-part.slice(1) }
-  let formatted = ""
-  let chars = integer-part.clusters().rev()
-  for (i, char) in chars.enumerate() {
-    if i > 0 and calc.rem(i, 3) == 0 { formatted = "'" + formatted }
-    formatted = char + formatted
-  }
-  decimal-part = decimal-part + "0" * (places - decimal-part.len())
-  (if is-negative { "-" } else { "" }) + formatted + "." + decimal-part
-}
 
 #let arrange_row(row) = {
   let rt = row.at("row_type", default: "")
@@ -185,6 +170,7 @@
 }
 
 
+// Single-item entry point: `#show: project.with(...)`.
 #let project(
   csv_path: "",
   item_identification: "",
@@ -193,42 +179,17 @@
   project_currency: "EUR",
   body,
 ) = {
-
-  set page(
-    paper: "a4",
-    margin: (left: 15mm, right: 10mm, top: 35mm, bottom: 20mm),
-    numbering: "1/1",
-    number-align: end,
-    header: [
-      #set text(font: template_fonts, size: 9pt, lang: "it")
-      #table(
-        columns: (1fr, 2fr),
-        rows: 10mm,
-        stroke: none,
-        inset: 0mm,
-        align: (top + left, top + right),
-        [#item_identification], [#item_name]
+  page-frame(
+    header: std-header(item_identification, item_name),
+    [
+      #render_analysis(
+        csv_path: csv_path,
+        item_identification: item_identification,
+        item_name: item_name,
+        item_description: item_description,
+        project_currency: project_currency,
       )
-    ],
-    footer: context [
-      #grid(
-        columns: (1fr, 1fr),
-        align: (left, right),
-        [#datetime.today().display("[day]/[month]/[year]")],
-        [#counter(page).display("1/1", both: true)]
-      )
+      #body
     ],
   )
-
-  set text(font: template_fonts, size: 8pt, lang: "it")
-
-  render_analysis(
-    csv_path: csv_path,
-    item_identification: item_identification,
-    item_name: item_name,
-    item_description: item_description,
-    project_currency: project_currency,
-  )
-
-  body
 }

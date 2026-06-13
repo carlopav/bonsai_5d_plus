@@ -335,7 +335,11 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_cost_ids")
         layout.prop(self, "nested_structure_depth")
 
+    _HANDLED_TYPES = ("PRICEDBILLOFQUANTITIES", "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
+
     def execute(self, context):
+        import tempfile
+
         if not _ensure_typst():
             self.report({"ERROR"}, "typst Python package not found. Install it in Blender's Python: pip install typst")
             return {"CANCELLED"}
@@ -343,7 +347,10 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             self.report({"ERROR"}, "ifc5d module not available (should be bundled with Bonsai).")
             return {"CANCELLED"}
 
-        from ifc5d.ifc5Dspreadsheet import Ifc5DPdfWriter
+        # ifc5d only provides the data extraction (IFC → CSV); all presentation
+        # (the Typst templates) lives in this addon under typst/.
+        from ifc5d.ifc5Dspreadsheet import Ifc5DCsvWriter
+        from . import typst_render as _tr
 
         ifc = _get_ifc()
         ifc_path = _get_ifc_path()
@@ -356,24 +363,68 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         safe_name = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
         pdf_path = os.path.join(os.path.dirname(os.path.abspath(ifc_path)), f"{safe_name}.pdf")
 
-        options = {
-            "should_print_rates":         self.should_print_rates,
-            "should_print_description":   self.should_print_description,
-            "should_print_each_quantity": self.should_print_each_quantity,
-            "should_print_summary":       self.should_print_summary,
-            "should_print_cover":         self.should_print_cover,
-            "should_print_cost_ids":      self.should_print_cost_ids,
-            "nested_structure_depth":     self.nested_structure_depth,
-        }
+        # Resolve the effective document type.
+        if self.force_schedule_type == "AUTO":
+            doc_type = schedule.PredefinedType
+            if doc_type not in self._HANDLED_TYPES:
+                doc_type = "PRICEDBILLOFQUANTITIES"
+        else:
+            doc_type = self.force_schedule_type
+
+        project_name = ""
+        projects = ifc.by_type("IfcProject")
+        if projects:
+            project_name = projects[0].Name or ""
+        currency = ""
+        monetary = ifc.by_type("IfcMonetaryUnit")
+        if monetary:
+            currency = monetary[0].Currency or ""
+
+        # Extract the CSV via ifc5d into a temp dir, then read it back.
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                Ifc5DCsvWriter(file=ifc, output=td, cost_schedule=schedule).write()
+            except Exception as e:
+                self.report({"ERROR"}, f"Data extraction failed: {e}")
+                return {"CANCELLED"}
+            csv_files = [f for f in os.listdir(td) if f.lower().endswith(".csv")]
+            if not csv_files:
+                self.report({"ERROR"}, "ifc5d produced no CSV for this schedule.")
+                return {"CANCELLED"}
+            with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
+                csv_text = f.read()
+
+        common = dict(
+            schedule_path="/schedule.csv",
+            title=project_name,
+            schedule_name=schedule.Name or "",
+            schedule_description=schedule.Description or "",
+            schedule_type=doc_type,
+            project_currency=currency,
+            should_print_cover=self.should_print_cover,
+            should_print_cost_ids=self.should_print_cost_ids,
+            should_print_description=self.should_print_description,
+        )
+
+        if doc_type == "SCHEDULEOFRATES":
+            body = _tr.show_with(
+                "schedule_of_rates.typ",
+                should_print_rates=self.should_print_rates,
+                **common,
+            )
+        else:
+            body = _tr.show_with(
+                "bill_of_quantities.typ",
+                nested_structure_depth=self.nested_structure_depth,
+                should_print_each_quantity=self.should_print_each_quantity,
+                should_print_summary=self.should_print_summary,
+                # Unpriced BoQ hides the rate/total columns.
+                should_print_rates=self.should_print_rates and doc_type != "UNPRICEDBILLOFQUANTITIES",
+                **common,
+            )
 
         try:
-            Ifc5DPdfWriter(
-                file=ifc,
-                output=pdf_path,
-                options=options,
-                cost_schedule=schedule,
-                force_schedule_type=self.force_schedule_type,
-            ).write()
+            _tr.compile_document(body, {"schedule.csv": csv_text}, pdf_path)
         except Exception as e:
             self.report({"ERROR"}, f"PDF generation failed: {e}")
             return {"CANCELLED"}
@@ -585,8 +636,7 @@ class ExportRateAnalysisToPdfOperator(bpy.types.Operator):
         return item is not None
 
     def execute(self, context):
-        import tempfile
-        import shutil
+        from . import typst_render as _tr
 
         if not _ensure_typst():
             self.report({"ERROR"}, "typst Python package not found. Install it in Blender's Python: pip install typst")
@@ -614,37 +664,19 @@ class ExportRateAnalysisToPdfOperator(bpy.types.Operator):
         if monetary:
             project_currency = monetary[0].Currency or ""
 
-        def _esc(s):
-            return (s or "").replace("\\", "\\\\").replace('"', "'").replace("\n", " ").replace("\r", "")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            csv_file = os.path.join(tmp, "rate_analysis.csv")
-            with open(csv_file, "w", encoding="utf-8", newline="") as f:
-                f.write(build_rate_analysis_csv(data))
-
-            shutil.copy(os.path.join(os.path.dirname(__file__), "typst_template_rate_analysis.typ"), tmp)
-
-            main  = '#import "typst_template_rate_analysis.typ": *\n'
-            main += "#show: project.with(\n"
-            main += '  csv_path: "rate_analysis.csv",\n'
-            main += f'  item_identification: "{_esc(data["identification"])}",\n'
-            main += f'  item_name: "{_esc(data["name"])}",\n'
-            main += f'  item_description: "{_esc(data["description"])}",\n'
-            main += f'  project_currency: "{_esc(project_currency)}",\n'
-            main += ")\n"
-
-            main_path = os.path.join(tmp, "main.typ")
-            with open(main_path, "w", encoding="utf-8") as f:
-                f.write(main)
-
-            try:
-                import typst
-                pdf_bytes = typst.compile(main_path)
-                with open(pdf_path, "wb") as f:
-                    f.write(pdf_bytes)
-            except Exception as exc:
-                self.report({"ERROR"}, f"PDF generation failed: {exc}")
-                return {"CANCELLED"}
+        body = _tr.show_with(
+            "rate_analysis.typ",
+            csv_path="/rate_analysis.csv",
+            item_identification=data["identification"],
+            item_name=data["name"],
+            item_description=data["description"],
+            project_currency=project_currency,
+        )
+        try:
+            _tr.compile_document(body, {"rate_analysis.csv": build_rate_analysis_csv(data)}, pdf_path)
+        except Exception as exc:
+            self.report({"ERROR"}, f"PDF generation failed: {exc}")
+            return {"CANCELLED"}
 
         self.report({"INFO"}, f"Saved: {pdf_path}")
         _open_file(pdf_path)
@@ -665,8 +697,7 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
             return False
 
     def execute(self, context):
-        import tempfile
-        import shutil
+        from . import typst_render as _tr
 
         if not _ensure_typst():
             self.report({"ERROR"}, "typst Python package not found.")
@@ -707,66 +738,52 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
         if monetary:
             project_currency = monetary[0].Currency or ""
 
-        def _esc(s):
-            return (s or "").replace("\\", "\\\\").replace('"', "'").replace("\n", " ").replace("\r", "")
-
         safe_sched = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
         pdf_path = os.path.join(
             os.path.dirname(os.path.abspath(ifc_path)),
             f"{safe_sched}_analisi_prezzi.pdf",
         )
 
-        with tempfile.TemporaryDirectory() as tmp:
-            shutil.copy(
-                os.path.join(os.path.dirname(__file__), "typst_template_rate_analysis.typ"),
-                tmp,
+        body = (
+            '#import "typst/common.typ": template_fonts\n'
+            '#import "typst/rate_analysis.typ": render_analysis\n'
+            '#set page(\n'
+            '  paper: "a4",\n'
+            '  margin: (left: 15mm, right: 10mm, top: 20mm, bottom: 20mm),\n'
+            '  numbering: "1/1",\n'
+            '  number-align: end,\n'
+            '  footer: context [\n'
+            '    #set text(font: template_fonts, size: 7pt)\n'
+            '    #grid(columns: (1fr, 1fr), align: (left, right),\n'
+            '      [#datetime.today().display("[day]/[month]/[year]")],\n'
+            '      [#counter(page).display("1/1", both: true)]\n'
+            '    )\n'
+            '  ],\n'
+            ')\n'
+            '#set text(font: template_fonts, size: 8pt, lang: "it")\n\n'
+        )
+
+        csvs = {}
+        for i, data in enumerate(ra_items):
+            csv_name = f"ra_{i:04d}.csv"
+            csvs[csv_name] = build_rate_analysis_csv(data)
+            if i > 0:
+                body += '#pagebreak()\n'
+            body += (
+                '#render_analysis(\n'
+                f'  csv_path: "/{csv_name}",\n'
+                f'  item_identification: "{_tr.esc(data["identification"])}",\n'
+                f'  item_name: "{_tr.esc(data["name"])}",\n'
+                f'  item_description: "{_tr.esc(data["description"])}",\n'
+                f'  project_currency: "{_tr.esc(project_currency)}",\n'
+                ')\n\n'
             )
 
-            lines = [
-                '#import "typst_template_rate_analysis.typ": render_analysis, template_fonts\n',
-                '#set page(\n',
-                '  paper: "a4",\n',
-                '  margin: (left: 15mm, right: 10mm, top: 20mm, bottom: 20mm),\n',
-                '  numbering: "1/1",\n',
-                '  number-align: end,\n',
-                '  footer: context [\n',
-                '    #set text(font: template_fonts, size: 7pt)\n',
-                '    #grid(columns: (1fr, 1fr), align: (left, right),\n',
-                '      [#datetime.today().display("[day]/[month]/[year]")],\n',
-                '      [#counter(page).display("1/1", both: true)]\n',
-                '    )\n',
-                '  ],\n',
-                ')\n',
-                '#set text(font: template_fonts, size: 8pt, lang: "it")\n\n',
-            ]
-
-            for i, data in enumerate(ra_items):
-                csv_name = f"ra_{i:04d}.csv"
-                with open(os.path.join(tmp, csv_name), "w", encoding="utf-8", newline="") as f:
-                    f.write(build_rate_analysis_csv(data))
-
-                if i > 0:
-                    lines.append('#pagebreak()\n')
-                lines.append('#render_analysis(\n')
-                lines.append(f'  csv_path: "{csv_name}",\n')
-                lines.append(f'  item_identification: "{_esc(data["identification"])}",\n')
-                lines.append(f'  item_name: "{_esc(data["name"])}",\n')
-                lines.append(f'  item_description: "{_esc(data["description"])}",\n')
-                lines.append(f'  project_currency: "{_esc(project_currency)}",\n')
-                lines.append(')\n\n')
-
-            main_path = os.path.join(tmp, "main.typ")
-            with open(main_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-
-            try:
-                import typst
-                pdf_bytes = typst.compile(main_path)
-                with open(pdf_path, "wb") as f:
-                    f.write(pdf_bytes)
-            except Exception as exc:
-                self.report({"ERROR"}, f"PDF generation failed: {exc}")
-                return {"CANCELLED"}
+        try:
+            _tr.compile_document(body, csvs, pdf_path)
+        except Exception as exc:
+            self.report({"ERROR"}, f"PDF generation failed: {exc}")
+            return {"CANCELLED"}
 
         self.report({"INFO"}, f"Saved {len(ra_items)} analisi: {pdf_path}")
         _open_file(pdf_path)
