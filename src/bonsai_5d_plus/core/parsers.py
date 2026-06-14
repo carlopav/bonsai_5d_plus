@@ -21,7 +21,7 @@
 Imported by module/rate_list and module/import_export.
 """
 
-from typing import List, TypedDict
+from typing import List, NotRequired, TypedDict
 
 
 class XmlRateItem(TypedDict):
@@ -38,6 +38,57 @@ class XmlRateItem(TypedDict):
     equipment: float
     materials: float
     safety: float
+    # IFC IfcCostValue.Category this item maps to: "Labor" / "Equipment" /
+    # "Materials" / "Safety" for pure resources, or "" for composite items
+    # (opere compiute), which instead carry a multi-category breakdown.
+    category: NotRequired[str]
+
+
+# Section-description keywords → IFC cost category. Classifies whole price-list
+# sections so the items under them are attributed entirely to one
+# IfcCostValue.Category. Terminology varies by region (Veneto: MANODOPERA /
+# NOLI / MATERIALI; Toscana: RISORSE UMANE / NOLEGGIO / PRODOTTI DA
+# COSTRUZIONE). Keywords are matched as uppercase substrings; keep them
+# specific enough not to collide with composite-work section names.
+_SECTION_CATEGORY_KEYWORDS = (
+    ("MANODOPERA", "Labor"),
+    ("RISORSE UMANE", "Labor"),
+    ("NOLI", "Equipment"),
+    ("NOLEGGI", "Equipment"),
+    ("SEMILAVORATI", "Materials"),
+    ("MATERIALI", "Materials"),
+    ("PRODOTTI DA COSTRUZIONE", "Materials"),
+)
+
+# IFC category → XmlRateItem incidence field.
+_CATEGORY_FIELD = {
+    "Labor": "labor",
+    "Equipment": "equipment",
+    "Materials": "materials",
+    "Safety": "safety",
+}
+
+
+def classify_section(desc):
+    """Return the IFC cost category for a section description, or "" (composite)."""
+    d = (desc or "").upper()
+    for keyword, category in _SECTION_CATEGORY_KEYWORDS:
+        if keyword in d:
+            return category
+    return ""
+
+
+def apply_resource_category(item):
+    """For a pure-resource item, put 100% of its value in its IFC category.
+
+    No-op for composite items (category ""), whose breakdown is left as parsed.
+    """
+    field = _CATEGORY_FIELD.get(item.get("category", ""))
+    if not field:
+        return
+    val = item.get("value", 0.0) or 0.0
+    for fld in _CATEGORY_FIELD.values():
+        item[fld] = val if fld == field else 0.0
 
 
 class PriceListParser:
@@ -107,6 +158,9 @@ class ParserXmlVeneto(PriceListParser):
         index = 0
         settori = root.findall("settore")
         for settore in settori:
+            # Resource sections (MANODOPERA, NOLI, MATERIALI, SEMILAVORATI) hold
+            # single-category items; the OPERE sections hold composite works.
+            section_category = classify_section(settore.attrib.get("desc", ""))
             self.xml_rate_list.append(
                 {
                     "index": index,
@@ -122,6 +176,7 @@ class ParserXmlVeneto(PriceListParser):
                     "equipment": 0.0,
                     "materials": 0.0,
                     "safety": 0.0,
+                    "category": section_category,
                 }
             )
             n_settore = index
@@ -142,6 +197,7 @@ class ParserXmlVeneto(PriceListParser):
                         "equipment": 0.0,
                         "materials": 0.0,
                         "safety": 0.0,
+                        "category": section_category,
                     }
                 )
                 n_capitolo = index
@@ -165,6 +221,7 @@ class ParserXmlVeneto(PriceListParser):
                             "equipment": 0.0,
                             "materials": 0.0,
                             "safety": 0.0,
+                            "category": section_category,
                         }
                     )
                     prezzi = paragrafo.findall(".//prezzo")
@@ -179,27 +236,30 @@ class ParserXmlVeneto(PriceListParser):
                             labor = float(prezzo.attrib.get("man", 0)) * val / 100
                         except (ValueError, TypeError):
                             labor = 0.0
-                        self.xml_rate_list.append(
-                            {
-                                "index": index,
-                                "level": 3,
-                                "is_parent": False,
-                                "parents": str(n_settore)
-                                + ","
-                                + str(n_capitolo)
-                                + ","
-                                + str(n_paragrafo),
-                                "id": prezzo.attrib.get("cod", ""),
-                                "name": prezzo.text or "",
-                                "desc": para_desc,
-                                "unit": prezzo.attrib.get("umi", ""),
-                                "value": val,
-                                "labor": labor,
-                                "equipment": 0.0,
-                                "materials": 0.0,
-                                "safety": 0.0,
-                            }
-                        )
+                        item = {
+                            "index": index,
+                            "level": 3,
+                            "is_parent": False,
+                            "parents": str(n_settore)
+                            + ","
+                            + str(n_capitolo)
+                            + ","
+                            + str(n_paragrafo),
+                            "id": prezzo.attrib.get("cod", ""),
+                            "name": prezzo.text or "",
+                            "desc": para_desc,
+                            "unit": prezzo.attrib.get("umi", ""),
+                            "value": val,
+                            "labor": labor,
+                            "equipment": 0.0,
+                            "materials": 0.0,
+                            "safety": 0.0,
+                            "category": section_category,
+                        }
+                        # Pure-resource sections → 100% to the matching category;
+                        # composite works keep the man%-derived labor incidence.
+                        apply_resource_category(item)
+                        self.xml_rate_list.append(item)
                         index += 1
 
 
