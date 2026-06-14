@@ -50,6 +50,27 @@ _CATEGORY_WRITE_ORDER = ['SUB_CONTRACT', 'LABOR', 'EQUIPMENT', 'MATERIAL', 'SAFE
 
 _LINE_CATEGORIES = set(_TO_IFC.values())
 
+
+def _detect_component_category(rate_item):
+    """Classify a source cost item as a rate-analysis component category.
+
+    A pure single-category resource — its whole value in one IFC category with
+    no uncategorised remainder — maps to that category (LABOR / EQUIPMENT /
+    MATERIAL / ...).  Composite works, or items carrying an uncategorised part,
+    fall back to SUB_CONTRACT.
+    """
+    line_cats = []
+    has_uncategorised = False
+    for cv in rate_item.CostValues or []:
+        cat = getattr(cv, "Category", None)
+        if cat in _LINE_CATEGORIES:
+            line_cats.append(cat)
+        elif cat != "*":  # None / "General" / anything else = uncategorised part
+            has_uncategorised = True
+    if len(line_cats) == 1 and not has_uncategorised:
+        return _FROM_IFC.get(line_cats[0], 'SUB_CONTRACT')
+    return 'SUB_CONTRACT'
+
 # ---------------------------------------------------------------------------
 # Quantity (libretto delle misure) — derived from tool.cost.QTY_TYPE_INFO
 # ---------------------------------------------------------------------------
@@ -471,7 +492,7 @@ class RA_OT_AddFromRate(bpy.types.Operator):
         comp = wm.rate_analysis_components.add()
         comp.description = rate_item.Name or ""
         comp.qty = 1.0
-        comp.category = 'SUB_CONTRACT'
+        comp.category = _detect_component_category(rate_item)
         comp.source_ifc_id = rate_item.id()
         comp.source_identification = rate_item.Identification or ""
         comp.unit_price = _get_rate_current_value(file, rate_item.id()) or 0.0
