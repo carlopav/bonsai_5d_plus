@@ -12,3 +12,10 @@ dist/
 
 # Stale zip in src/
 src/*.zip
+
+# Prezzari data files — never committed (DEI are private; the rest are heavy).
+# Keep only the folder structure and README.
+assets/prezzari/**
+!assets/prezzari/**/
+!assets/prezzari/README.md
+!assets/prezzari/**/.gitkeep
