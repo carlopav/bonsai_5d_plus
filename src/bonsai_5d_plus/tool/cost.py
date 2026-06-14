@@ -271,21 +271,18 @@ def remove_all_cost_values(tool, item):
 # Cost value writers
 # ---------------------------------------------------------------------------
 
-def _make_monetary_cv(file, category, amount):
-    return file.create_entity(
-        "IfcCostValue",
-        Category=category or None,
-        AppliedValue=file.create_entity("IfcMonetaryMeasure", round(amount, 2)),
-    )
-
-
 def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
-    """Write a nested IfcCostValue structure for a prezzario/EPU item.
+    """Write a prezzario/EPU item's cost as flat, categorised top-level CostValues.
 
-    Creates one summary CostValue (via Bonsai API for undo safety) with
-    AppliedValue = total_value and UnitBasis = (1.0, unit).  If any
-    incidences are non-zero, builds sub-components and assigns them to
-    summary.Components with ArithmeticOperator = ADD.
+    One IfcCostValue per non-zero incidence category (plus an uncategorised
+    remainder when the breakdown doesn't cover the whole value), each created
+    via the Bonsai API for undo safety, with AppliedValue = the category total
+    and UnitBasis = (1.0, unit).
+
+    The categories are kept at the top level — not nested under a summary —
+    because the ifc5d exporter only reads top-level CostValue categories.
+    Nesting would hide the per-category totals (e.g. Labor) that the cost
+    documents need; here we only need the category total, not a cost tree.
 
     incidences: list of (category_str, amount_float), e.g.
         [("Labor", 30.0), ("Equipment", 0.0), ("Materials", 60.0), ("Safety", 10.0)]
@@ -293,24 +290,22 @@ def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
     if total_value == 0.0:
         return
 
-    cv_summary = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-    tool.Ifc.run("cost.edit_cost_value", cost_value=cv_summary,
-                 attributes={"AppliedValue": round(total_value, 2)})
-    set_unit_basis(file, cv_summary, 1.0, unit)
-
     active = [(cat, amt) for cat, amt in incidences if amt != 0.0]
-    if not active:
-        return
-
-    sub_components = []
     remaining = round(total_value - sum(amt for _, amt in active), 2)
-    if remaining != 0.0:
-        sub_components.append(_make_monetary_cv(file, None, remaining))
-    for category, amount in active:
-        sub_components.append(_make_monetary_cv(file, category, amount))
 
-    cv_summary.ArithmeticOperator = "ADD"
-    cv_summary.Components = sub_components
+    rows = []
+    # Uncategorised remainder, or the whole value when no breakdown is known.
+    if remaining != 0.0 or not active:
+        rows.append((None, remaining if active else total_value))
+    rows.extend(active)
+
+    for category, amount in rows:
+        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+        attributes = {"AppliedValue": round(amount, 2)}
+        if category:
+            attributes["Category"] = category
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes=attributes)
+        set_unit_basis(file, cv, 1.0, unit)
 
 
 # ---------------------------------------------------------------------------
