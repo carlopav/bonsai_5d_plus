@@ -541,7 +541,9 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                 if import_measurement_rows and rg_items:
                     new_qtys = []
                     for rg in rg_items:
-                        if rg["qty"] == 0.0:
+                        # Keep note/heading rows (qty 0 with text); skip only the
+                        # truly empty placeholder rows (no text, no value).
+                        if rg["qty"] == 0.0 and not rg["desc"]:
                             continue
                         kw = {
                             "Name": rg["desc"] or "Qty",
@@ -552,6 +554,13 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                         new_qtys.append(file.create_entity(ifc_class, **kw))
                     if new_qtys:
                         cost_item.CostQuantities = list(cost_item.CostQuantities or []) + new_qtys
+                    elif quantity != 0.0:
+                        # All rows were empty placeholders → keep the VCItem total.
+                        qty = file.create_entity(ifc_class, **{
+                            "Name": rate.get("qty_name") or "Qty",
+                            value_attr: round(quantity, 4),
+                        })
+                        cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty]
                 elif quantity != 0.0:
                     qty = file.create_entity(ifc_class, **{
                         "Name": rate.get("qty_name") or "Qty",

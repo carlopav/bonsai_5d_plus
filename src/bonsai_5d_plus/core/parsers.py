@@ -1148,33 +1148,44 @@ class ParserXpwe(PriceListParser):
         """Parse RGItem children of a VCItem into a list of measurement row dicts.
 
         RGItem.Quantita stores the VCItem total (not the individual row value).
-        The row quantity must be computed as PartiUguali × Lunghezza × Larghezza × HPeso.
-        Expressions like '17.3+1+1' are evaluated via _eval_expr.
+        The row quantity is computed as PartiUguali × Lunghezza × Larghezza × HPeso
+        (empty factors count as 1). Expressions like '256.667-23' are evaluated
+        via _eval_expr and kept verbatim in the formula.
+
+        To avoid losing information, the formula keeps all four positions
+        (empty factors shown as "1"), so which factor is which is preserved.
+        Note/heading rows (no numeric dimension, qty 0) keep their description
+        and carry no formula, so their text survives without affecting the total.
         """
         rows = []
         for rg in vc_elem.findall("PweVCMisure/RGItem"):
             desc = self.clean_string(self._text(rg, "Descrizione"))
-            formula_parts = []
+            raws = [self._text(rg, tag).strip()
+                    for tag in ("PartiUguali", "Lunghezza", "Larghezza", "HPeso")]
+
+            present = [r for r in raws if r != ""]
             qty = 1.0
-            has_field = False
-            for tag in ("PartiUguali", "Lunghezza", "Larghezza", "HPeso"):
-                raw = self._text(rg, tag).strip()
-                if not raw:
-                    continue
-                has_field = True
-                try:
-                    float(raw.replace(",", "."))
-                    formula_parts.append(raw)
-                except ValueError:
-                    formula_parts.append(f"({raw})")
-                val = self._eval_expr(raw)
-                if val is not None:
-                    qty *= val
-            rows.append({
-                "desc": desc,
-                "qty": round(qty, 6) if has_field else 0.0,
-                "formula": " × ".join(formula_parts),
-            })
+            for r in present:
+                val = self._eval_expr(r)
+                qty *= (val if val is not None else 0.0)
+            qty = round(qty, 6) if present else 0.0
+
+            if qty == 0.0:
+                formula = ""  # note / heading / placeholder row
+            else:
+                parts = []
+                for r in raws:
+                    if r == "":
+                        parts.append("1")
+                    else:
+                        try:
+                            float(r.replace(",", "."))
+                            parts.append(r)
+                        except ValueError:
+                            parts.append(f"({r})")
+                formula = " × ".join(parts)
+
+            rows.append({"desc": desc, "qty": qty, "formula": formula})
         return rows
 
     @staticmethod
