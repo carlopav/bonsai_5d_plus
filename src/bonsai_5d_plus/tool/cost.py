@@ -285,7 +285,7 @@ def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
     documents need; here we only need the category total, not a cost tree.
 
     incidences: list of (category_str, amount_float), e.g.
-        [("Labor", 30.0), ("Equipment", 0.0), ("Materials", 60.0), ("Safety", 10.0)]
+        [("Labor", 30.0), ("Equipment", 0.0), ("Material", 60.0), ("Safety", 10.0)]
     """
     if total_value == 0.0:
         return
@@ -368,7 +368,7 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
         incidences=[
             ("Labor",     float(rate_attrib["labor"])),
             ("Equipment", float(rate_attrib["equipment"])),
-            ("Materials", float(rate_attrib["materials"])),
+            ("Material", float(rate_attrib["materials"])),
             ("Safety",    float(rate_attrib["safety"])),
         ],
     )
@@ -444,7 +444,7 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
                     incidences=[
                         ("Labor",     float(rate["labor"])),
                         ("Equipment", float(rate["equipment"])),
-                        ("Materials", float(rate["materials"])),
+                        ("Material", float(rate["materials"])),
                         ("Safety",    float(rate["safety"])),
                     ],
                 )

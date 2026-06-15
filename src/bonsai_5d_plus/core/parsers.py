@@ -39,7 +39,7 @@ class XmlRateItem(TypedDict):
     materials: float
     safety: float
     # IFC IfcCostValue.Category this item maps to: "Labor" / "Equipment" /
-    # "Materials" / "Safety" for pure resources, or "" for composite items
+    # "Material" / "Safety" for pure resources, or "" for composite items
     # (opere compiute), which instead carry a multi-category breakdown.
     category: NotRequired[str]
 
@@ -56,9 +56,9 @@ _SECTION_CATEGORY_KEYWORDS = (
     ("RISORSE UMANE", "Labor"),
     ("NOLI", "Equipment"),
     ("NOLEGGI", "Equipment"),
-    ("SEMILAVORATI", "Materials"),
-    ("MATERIALI", "Materials"),
-    ("PRODOTTI DA COSTRUZIONE", "Materials"),
+    ("SEMILAVORATI", "Material"),
+    ("MATERIALI", "Material"),
+    ("PRODOTTI DA COSTRUZIONE", "Material"),
     # Specific phrasing — bare "SICUREZZA" would catch composite works such as
     # "barriere di sicurezza" (guardrails); the resource sections are the
     # explicit "SALUTE E SICUREZZA" (Toscana) / "COSTI DELLA SICUREZZA" (PAT).
@@ -70,7 +70,7 @@ _SECTION_CATEGORY_KEYWORDS = (
 _CATEGORY_FIELD = {
     "Labor": "labor",
     "Equipment": "equipment",
-    "Materials": "materials",
+    "Material": "materials",
     "Safety": "safety",
 }
 
@@ -607,7 +607,7 @@ class ParserXmlLombardia(PriceListParser):
     # their resource breakdown.
     _TIPOLOGIA_CATEGORY = {
         "RISORSA UMANA": "Labor",
-        "RISORSA MATERIALE": "Materials",
+        "RISORSA MATERIALE": "Material",
         "RISORSA STRUMENTALE PRODUTTIVA": "Equipment",
         "RISORSA STRUMENTALE TECNOLOGICA": "Equipment",
     }
@@ -1284,7 +1284,7 @@ class ParserXmlSix(PriceListParser):
     # SIX standard 'specie' codes, used as a fallback when the specie has no
     # description: 10 = Materiali, 20 = Manodopera, 30 = Noli. Composite
     # ('Opere Compiute', usually 60) and others map to "" (no override).
-    _SIX_SPCID_CATEGORY = {"10": "Materials", "20": "Labor", "30": "Equipment"}
+    _SIX_SPCID_CATEGORY = {"10": "Material", "20": "Labor", "30": "Equipment"}
 
     @staticmethod
     def get_specie_categories(prezzario):
