@@ -1,5 +1,7 @@
 # Bonsai5D+
 
+> **A [Blender](https://www.blender.org) / [Bonsai BIM](https://bonsaibim.org) add-on for 5D cost management** — price-list import, bill of quantities, rate analysis, labor-incidence reporting and PDF output — stored natively in the IFC file (`IfcCostSchedule` / `IfcCostItem`, no proprietary formats) and tailored to Italian public-procurement practice (D.Lgs. 36/2023). Full English description at the [end of this page](#summary-english).
+
 Estensione per [Bonsai BIM](https://bonsaibim.org) che aggiunge strumenti di **computo metrico estimativo e contabilità dei lavori** in conformità con le prassi degli appalti pubblici italiani (Codice dei Contratti Pubblici, D.Lgs. 36/2023).
 
 Bonsai5D+ opera direttamente sul file IFC, sfruttando le entità `IfcCostSchedule` e `IfcCostItem` come struttura dati nativa. Non introduce formati proprietari: tutto ciò che viene creato o modificato resta leggibile da qualsiasi software IFC-compatibile.
@@ -61,6 +63,8 @@ Esporta in PDF i documenti di costo direttamente dalla sidebar, senza passare pe
 **Export Schedule to PDF** — Stampa il Cost Schedule attivo in formato PDF tramite `Ifc5DPdfWriter` (ifc5d / IfcOpenShell). Il dialogo permette di scegliere tipo di documento (Priced BoQ, Schedule of Rates, ecc.), visibilità di tariffe, descrizioni, quantità di dettaglio, pagina di riepilogo e copertina.
 
 **Export Rate Analysis to PDF** — Stampa la **scheda analisi prezzi** della voce attiva (item pinnato nell'editor oppure item selezionato nel pannello Bonsai). I dati vengono letti **direttamente dall'IFC**, non dalla UI, quindi non è necessario aver caricato la voce nell'editor prima di esportare. Per ogni categoria di componenti (Opere Compiute, Manodopera, Noli, Materiali, Oneri per la Sicurezza) viene generato un riquadro con intestazione e subtotale separati. Il footer della scheda mostra: costo tecnico, spese generali (%), utile d'impresa (%), arrotondamento e prezzo finale.
+
+**Export Labor Cost Breakdown to PDF** — Stampa il **quadro di incidenza della manodopera** del Cost Schedule attivo: stessa struttura del Bill of Quantities ma con due colonne di costo (costo totale e costo manodopera) e la percentuale di incidenza per ogni voce, più una pagina di riepilogo finale con l'incidenza per capitolo e il totale generale. I dati provengono dallo stesso estrattore `Ifc5DCsvWriter` del BoQ (colonna di categoria "Labor"); l'incidenza compare solo per voci con `IfcCostValue` di categoria Labor di primo livello.
 
 **Export Sheets to PDF** — Converte gli sheet SVG prodotti da Bonsai Drawing in PDF, salvandoli accanto agli SVG originali. Se gli sheet sono ≤ 3 apre tutti i PDF generati; se sono più di 3 apre la cartella contenitore.
 
@@ -138,6 +142,7 @@ blender.exe --background --python tools/generate_classifications.py
 - **Prints Manager** — PDF export for cost documents, powered by [Typst](https://typst.app):
   - *Export Schedule to PDF*: renders the active `IfcCostSchedule` to PDF via `Ifc5DPdfWriter` (ifc5d / IfcOpenShell) with configurable options (document type, rates visibility, quantity breakdown, summary page, cover).
   - *Export Rate Analysis to PDF*: generates a **scheda analisi prezzi** for the active cost item. Data is read **directly from the IFC file** (not from the UI state), so no prior loading in the Rate Analysis editor is required. Components are grouped by category (Sub-Contract, Labor, Equipment, Material, Safety) with a separate header and subtotal per group; the footer shows technical cost, overhead %, profit %, rounding, and final price.
+  - *Export Labor Cost Breakdown to PDF*: a **labor-incidence schedule** for the active Cost Schedule — the Bill-of-Quantities layout with two cost columns (total cost and labor cost) and a per-row labor incidence %, plus a final summary page with the incidence per chapter and the general total. Uses the same `Ifc5DCsvWriter` extractor as the BoQ ("Labor" category column); the incidence only appears for items carrying a top-level Labor `IfcCostValue`.
   - *Export Sheets to PDF*: converts Bonsai Drawing SVG sheets to PDF, saved alongside the originals; opens generated files automatically.
   - **IFC structure:** all cost items (both imported price-list entries and rate-analysis items) use a nested `IfcCostValue` structure: a summary value with the total price and `UnitBasis` (item unit of measure), and monetary category sub-components in `Components` (`ArithmeticOperator = ADD`). Items with no category incidences carry only the summary value. `IfcCostItem.ObjectType = "RATE_ANALYSIS"` marks items with a genuine qty × unit-price breakdown, distinguishing them from prezzario entries that carry aggregate category incidences only.
 
