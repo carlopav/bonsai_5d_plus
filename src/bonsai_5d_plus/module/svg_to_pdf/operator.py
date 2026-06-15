@@ -64,18 +64,18 @@ def _schedule_of(cost_item):
 def _source_rate_label(ifc, cost_item):
     """Label of the linked price-list item, or "" if none.
 
-    Format: "<ScheduleOfRates Name> - <control Identification> <control Name>".
-    The template clips it to a single line at the actual column width.
+    Format: "<ScheduleOfRates Name> - <control Identification>". The control's
+    Name is intentionally omitted to keep the label short (single line).
     """
     ctrl = _rate_controller(cost_item)
     if ctrl is None:
         return ""
     sor = _schedule_of(ctrl)
     sor_name = (sor.Name or "") if sor is not None else ""
-    tail = " ".join(x for x in ((ctrl.Identification or ""), (ctrl.Name or "")) if x)
-    if sor_name and tail:
-        return f"{sor_name} - {tail}"
-    return sor_name or tail
+    ident = ctrl.Identification or ""
+    if sor_name and ident:
+        return f"{sor_name} - {ident}"
+    return sor_name or ident
 
 
 def _augment_csv_source_rate(ifc, csv_text):
