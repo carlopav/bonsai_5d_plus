@@ -116,7 +116,7 @@
     let description = if options.at("should_print_description") == true and row.at("Description") != "" {
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
-    let unit = table.cell(align: right)[Sum #unit_map.at(row.at("Unit"), default: "")]
+    let unit = table.cell(align: right)[Sum #fmt-unit(row.at("Unit", default: ""))]
     let quant = if row.at("Quantity") == "" { 0.0 } else { format-decimal(float(row.at("Quantity"))) }
     let rate = if row.at("RateSubtotal") == "" { 0.0 } else { format-decimal(float(row.at("RateSubtotal"))) }
     let total = if row.at("Quantity") == "" or row.at("RateSubtotal") == "" {

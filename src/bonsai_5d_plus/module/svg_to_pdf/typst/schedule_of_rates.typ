@@ -25,7 +25,7 @@
   if row.at("ItemIsASum") == "True" { return () }  // skip sections
   let name = strong(upper(row.at("Name")))
   let description = [#par(justify: true, text(8pt, row.at("Description", default: "")))]
-  let unit = table.cell(align: right + bottom)[#unit_map.at(row.at("Unit"), default: "")]
+  let unit = table.cell(align: right + bottom)[#fmt-unit(row.at("Unit", default: ""))]
   let rate = if row.at("RateSubtotal") == "" { 0.0 } else { format-decimal(float(row.at("RateSubtotal"))) }
   (
     id-cell(row, options.at("should_print_hierarchy")),

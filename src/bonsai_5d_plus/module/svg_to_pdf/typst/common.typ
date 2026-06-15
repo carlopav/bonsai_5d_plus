@@ -35,17 +35,34 @@
   format-decimal(num, places: 2) + (if currency != "" { " " + currency } else { "" })
 }
 
-// IFC unit name → printable symbol. Unknown units pass through unchanged.
-#let unit_map = (
-  "METRE": "m",
-  "SQUARE_METRE": "m²",
-  "m2": "m²",
-  "CUBIC_METRE": "m³",
-  "m3": "m³",
-  "VOLUMEUNIT / CUBIC_METRE": "m³",
-  "KILOGRAM": "kg",
+// IFC unit Name → printable symbol. Keys cover both the verbose form produced
+// by ifc5d's format_unit ("<UnitType> / <Prefix> <Name>", we map the part after
+// " / ") and the compact symbols produced by ifcopenshell's get_unit_symbol
+// ("m2", "kg", "cm2", "Mg" …). The prefix-on-area/volume convention is standard:
+// cm² = SQUARE_METRE with prefix CENTI, dm³ = CUBIC_METRE with prefix DECI, etc.
+#let unit_symbols = (
+  // length
+  "METRE": "m", "KILO METRE": "km", "DECI METRE": "dm", "CENTI METRE": "cm", "MILLI METRE": "mm",
+  // area
+  "SQUARE_METRE": "m²", "DECI SQUARE_METRE": "dm²", "CENTI SQUARE_METRE": "cm²", "MILLI SQUARE_METRE": "mm²",
+  // volume
+  "CUBIC_METRE": "m³", "DECI CUBIC_METRE": "dm³", "CENTI CUBIC_METRE": "cm³",
+  // mass (tonne kept as "t" rather than the SI "Mg")
+  "GRAM": "g", "KILO GRAM": "kg", "MEGA GRAM": "t",
+  // time
+  "HOUR": "h", "MINUTE": "min", "SECOND": "s",
+  // compact forms from ifcopenshell.get_unit_symbol
+  "m2": "m²", "m3": "m³", "cm2": "cm²", "dm2": "dm²", "mm2": "mm²", "cm3": "cm³", "dm3": "dm³", "Mg": "t",
 )
-#let fmt-unit(u) = unit_map.at(u, default: u)
+
+// IFC unit → printable symbol. Handles the verbose "<UnitType> / <Name>" form,
+// the compact symbol form, and passes any free-text unit (USERDEFINED such as
+// "a corpo", "cad", "q", "mq/cm") through unchanged.
+#let fmt-unit(u) = {
+  if u == "" { return "" }
+  let tail = if u.contains(" / ") { u.split(" / ").last() } else { u }
+  unit_symbols.at(tail, default: tail)
+}
 
 // First-column cell: the cost item's Identification, optionally prefixed by the
 // hierarchical renumbering (the CSV "Hierarchy" column) when it is enabled.
