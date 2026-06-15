@@ -74,8 +74,10 @@ def _source_rate_label(ifc, cost_item):
     sor_name = (sor.Name or "") if sor is not None else ""
     ident = ctrl.Identification or ""
     if sor_name and ident:
-        return f"{sor_name} - {ident}"
-    return sor_name or ident
+        return f"{sor_name} - [{ident}]"
+    if ident:
+        return f"[{ident}]"
+    return sor_name
 
 
 def _rebuild_quantities_json(cost_item):

@@ -67,7 +67,7 @@
 // relationship): "<ScheduleOfRates Name> - <control Identification> <control Name>".
 #let source-rate-line(row) = {
   let s = row.at("SourceRate", default: "")
-  if s != "" { linebreak() + text(7pt, fill: gray)[#s] } else { [] }
+  if s != "" { linebreak() + text(7pt, style: "italic")[#s] } else { [] }
 }
 
 #let today-str() = datetime.today().display("[day]/[month]/[year]")
