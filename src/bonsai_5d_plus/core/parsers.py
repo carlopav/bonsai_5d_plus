@@ -865,6 +865,15 @@ class ParserXpwe(PriceListParser):
             if sbcap_key in sbcap_to_index:
                 parents_parts.append(str(sbcap_to_index[sbcap_key]))
 
+            # Resource category from the deepest classified section: a combined
+            # supercapitolo ("MANODOPERA, NOLI, TRASPORTI, MATERIALI …", PAT)
+            # is overridden by its specific capitolo ("NOLI E TRASPORTI" etc.);
+            # DEI keeps the split at the supercapitolo ("MANO D'OPERA", "NOLI").
+            category = (
+                classify_section(subcaps.get(id_sbcap, {}).get("desc", ""))
+                or classify_section(caps.get(id_cap, {}).get("desc", ""))
+                or classify_section(supercaps.get(id_spcap, {}).get("desc", ""))
+            )
             ep_entry = {
                 "index": index,
                 "level": len(parents_parts),
@@ -879,7 +888,11 @@ class ParserXpwe(PriceListParser):
                 "equipment": incidenza("IncATTR"),
                 "materials": incidenza("IncMAT"),
                 "safety": incidenza("IncSIC"),
+                "category": category,
             }
+            # Pure-resource items → 100% to their category; opere compiute keep
+            # the Inc* breakdown above.
+            apply_resource_category(ep_entry)
             self.xml_rate_list.append(ep_entry)
             xml_id = ep.get("ID")
             if xml_id:
