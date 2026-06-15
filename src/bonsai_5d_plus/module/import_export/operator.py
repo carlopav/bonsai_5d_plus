@@ -33,7 +33,7 @@ class ImportXpweCostSchedule(bpy.types.Operator, ImportHelper):
     import_measurement_rows: bpy.props.BoolProperty(
         name="Import Measurement Rows",
         description="Import each measurement row (RGItem) as a separate IFC quantity, keeping its description and the NR x L x W x H breakdown in the IFC Formula attribute, instead of a single VCItem total",
-        default=False,
+        default=True,
     )
 
     @classmethod
