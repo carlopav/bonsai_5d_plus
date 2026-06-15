@@ -26,7 +26,7 @@
     left: if x == 0 { 1pt } else { 0.25pt },
     right: 1pt, top: 1pt, bottom: 1pt,
   ),
-  [Hierarchy], [Description], [n°], [l], [w], [h/w], [Quantity],
+  [Code], [Description], [n°], [l], [w], [h/w], [Quantity],
   [Rate (#currency)], [Total (#currency)],
 )
 
@@ -51,8 +51,8 @@
         [], [], [], [], [], [], [], [], [],
       )
       (
-        table.cell(..root-cost-cell-style)[#row.at("Hierarchy")],
-        table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #linebreak() #row.at("Description", default: "")],
+        table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"))],
+        table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")],
         table.cell(..root-cost-cell-style)[],
         table.cell(..root-cost-cell-style)[],
         table.cell(..root-cost-cell-style)[],
@@ -71,9 +71,6 @@
   } else {
     // COST ITEM
     let name = if row.at("Name") == "" { strong(upper("Unnamed Cost Item")) } else { strong(upper(row.at("Name"))) }
-    let identification = if options.at("should_print_cost_ids") == true and row.at("Identification") != "" {
-      linebreak() + row.at("Identification")
-    } else { "" }
     let description = if options.at("should_print_description") == true and row.at("Description") != "" {
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
@@ -86,8 +83,8 @@
       format-decimal(float(row.at("Quantity")) * float(row.at("RateSubtotal")), places: 2)
     }
     (
-      row.at("Hierarchy"),
-      name + identification + description,
+      id-cell(row, options.at("should_print_hierarchy")),
+      name + source-rate-line(row) + description,
       [], [], [], [], [], [], [],
     )
     if row.at("Quantities") != "" and options.at("should_print_each_quantity") {
@@ -125,7 +122,7 @@
     if row.at("Index") == "1" {
       // ROOT COST
       (
-        strong[#row.at("Hierarchy")],
+        strong[#id-cell(row, options.at("should_print_hierarchy"))],
         strong(upper(row.at("Name"))),
         [],
         if options.at("should_print_rates") {
@@ -135,7 +132,7 @@
     } else {
       // SUB-SECTION
       (
-        row.at("Hierarchy"),
+        id-cell(row, options.at("should_print_hierarchy")),
         table.cell(inset: (left: int(row.at("Index")) * 2.5mm))[#upper(row.at("Name"))],
         if options.at("should_print_rates") { format-decimal(float(row.at("TotalPrice")), places: 2) } else { [] },
         [],
@@ -204,7 +201,7 @@
   project_currency: "",
   nested_structure_depth: 0,
   should_print_cover: false,
-  should_print_cost_ids: true,
+  should_print_hierarchy: false,
   should_print_description: false,
   should_print_each_quantity: true,
   should_print_rates: true,
@@ -231,7 +228,7 @@
 
   let options = (
     "nested_structure_depth": nested_structure_depth,
-    "should_print_cost_ids": should_print_cost_ids,
+    "should_print_hierarchy": should_print_hierarchy,
     "should_print_description": should_print_description,
     "should_print_each_quantity": should_print_each_quantity,
     "should_print_rates": should_print_rates,

@@ -18,7 +18,7 @@
     left: if x == 0 { 1pt } else { 0.25pt },
     right: 1pt, top: 1pt, bottom: 1pt,
   ),
-  [Identification], [Description], [Rate (#currency)],
+  [Code], [Description], [Rate (#currency)],
 )
 
 #let arrange_schedule_of_rates_row(row, options) = {
@@ -28,8 +28,8 @@
   let unit = table.cell(align: right + bottom)[#unit_map.at(row.at("Unit"), default: "")]
   let rate = if row.at("RateSubtotal") == "" { 0.0 } else { format-decimal(float(row.at("RateSubtotal"))) }
   (
-    row.at("Identification"),
-    name + linebreak() + description,
+    id-cell(row, options.at("should_print_hierarchy")),
+    name + source-rate-line(row) + linebreak() + description,
     [],
   )
   (
@@ -62,7 +62,7 @@
   schedule_type: "SCHEDULEOFRATES",
   project_currency: "",
   should_print_cover: false,
-  should_print_cost_ids: true,
+  should_print_hierarchy: false,
   should_print_description: false,
   should_print_rates: true,
   body,
@@ -86,7 +86,7 @@
   )
 
   let options = (
-    "should_print_cost_ids": should_print_cost_ids,
+    "should_print_hierarchy": should_print_hierarchy,
     "should_print_description": should_print_description,
     "should_print_rates": should_print_rates,
   )

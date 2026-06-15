@@ -41,6 +41,73 @@ def _get_ifc_path():
         return None
 
 
+def _rate_controller(cost_item):
+    """The Schedule-of-Rates cost item controlling this one, via IfcRelAssignsToControl."""
+    for rel in (cost_item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl"):
+            ctrl = rel.RelatingControl
+            if ctrl.is_a("IfcCostItem"):
+                return ctrl
+    return None
+
+
+def _schedule_of(cost_item):
+    """The IfcCostSchedule a cost item belongs to (walks up the nesting)."""
+    for rel in (cost_item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+            return rel.RelatingControl
+    for rel in (cost_item.Nests or []):
+        return _schedule_of(rel.RelatingObject)
+    return None
+
+
+def _source_rate_label(ifc, cost_item):
+    """Label of the linked price-list item, or "" if none.
+
+    Format: "<ScheduleOfRates Name> - <control Identification> <control Name>".
+    """
+    ctrl = _rate_controller(cost_item)
+    if ctrl is None:
+        return ""
+    sor = _schedule_of(ctrl)
+    sor_name = (sor.Name or "") if sor is not None else ""
+    tail = " ".join(x for x in ((ctrl.Identification or ""), (ctrl.Name or "")) if x)
+    if sor_name and tail:
+        return f"{sor_name} - {tail}"
+    return sor_name or tail
+
+
+def _augment_csv_source_rate(ifc, csv_text):
+    """Add a "SourceRate" column to the ifc5d CSV (linked rate per cost item)."""
+    import csv as _csv
+    import io
+
+    reader = _csv.DictReader(io.StringIO(csv_text))
+    if not reader.fieldnames:
+        return csv_text
+    fieldnames = list(reader.fieldnames)
+    if "SourceRate" not in fieldnames:
+        fieldnames.append("SourceRate")
+
+    rows = []
+    for row in reader:
+        label = ""
+        sid = row.get("Id", "")
+        if sid:
+            try:
+                label = _source_rate_label(ifc, ifc.by_id(int(sid)))
+            except Exception:
+                label = ""
+        row["SourceRate"] = label
+        rows.append(row)
+
+    out = io.StringIO()
+    writer = _csv.DictWriter(out, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
 def _ensure_ifc5d():
     try:
         import ifc5d  # noqa: F401
@@ -309,7 +376,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
     should_print_each_quantity:  bpy.props.BoolProperty(name="Show Quantity Breakdown", default=True)
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Page",       default=True)
     should_print_cover:          bpy.props.BoolProperty(name="Show Cover Page",         default=False)
-    should_print_cost_ids:       bpy.props.BoolProperty(name="Show Item IDs",           default=True)
+    should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
     nested_structure_depth:      bpy.props.IntProperty( name="Max Depth (0 = all)",     default=0, min=0)
 
     @classmethod
@@ -332,7 +399,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_each_quantity")
         col.prop(self, "should_print_summary")
         col.prop(self, "should_print_cover")
-        col.prop(self, "should_print_cost_ids")
+        col.prop(self, "should_print_hierarchy")
         layout.prop(self, "nested_structure_depth")
 
     _HANDLED_TYPES = ("PRICEDBILLOFQUANTITIES", "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
@@ -394,6 +461,10 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
                 csv_text = f.read()
 
+        # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
+        # "SourceRate" column the templates render under each item's Name.
+        csv_text = _augment_csv_source_rate(ifc, csv_text)
+
         common = dict(
             schedule_path="/schedule.csv",
             title=project_name,
@@ -402,7 +473,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             schedule_type=doc_type,
             project_currency=currency,
             should_print_cover=self.should_print_cover,
-            should_print_cost_ids=self.should_print_cost_ids,
+            should_print_hierarchy=self.should_print_hierarchy,
             should_print_description=self.should_print_description,
         )
 
@@ -440,10 +511,10 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
     bl_label = "Export Labor Cost Breakdown to PDF"
     bl_options = {"REGISTER"}
 
-    should_print_description: bpy.props.BoolProperty(name="Show Descriptions",  default=False)
-    should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",    default=False)
-    should_print_cost_ids:    bpy.props.BoolProperty(name="Show Item IDs",      default=True)
-    should_print_summary:     bpy.props.BoolProperty(name="Show Summary Page",  default=True)
+    should_print_description: bpy.props.BoolProperty(name="Show Descriptions",   default=False)
+    should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",     default=False)
+    should_print_hierarchy:   bpy.props.BoolProperty(name="Hierarchy Renumbering", default=False)
+    should_print_summary:     bpy.props.BoolProperty(name="Show Summary Page",   default=True)
     nested_structure_depth:   bpy.props.IntProperty( name="Max Depth (0 = all)", default=0, min=0)
 
     @classmethod
@@ -461,7 +532,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
         col = layout.column(align=True)
         col.prop(self, "should_print_description")
         col.prop(self, "should_print_cover")
-        col.prop(self, "should_print_cost_ids")
+        col.prop(self, "should_print_hierarchy")
         col.prop(self, "should_print_summary")
         layout.prop(self, "nested_structure_depth")
 
@@ -516,6 +587,10 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
             with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
                 csv_text = f.read()
 
+        # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
+        # "SourceRate" column the template renders under each item's Name.
+        csv_text = _augment_csv_source_rate(ifc, csv_text)
+
         body = _tr.show_with(
             "labor_cost_breakdown.typ",
             schedule_path="/schedule.csv",
@@ -526,7 +601,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
             project_currency=currency,
             nested_structure_depth=self.nested_structure_depth,
             should_print_cover=self.should_print_cover,
-            should_print_cost_ids=self.should_print_cost_ids,
+            should_print_hierarchy=self.should_print_hierarchy,
             should_print_description=self.should_print_description,
             should_print_summary=self.should_print_summary,
         )

@@ -47,6 +47,29 @@
 )
 #let fmt-unit(u) = unit_map.at(u, default: u)
 
+// First-column cell: the cost item's Identification, optionally prefixed by the
+// hierarchical renumbering (the CSV "Hierarchy" column) when it is enabled.
+// Identification is always shown; the hierarchy number, when on, sits above it.
+#let id-cell(row, show_hierarchy) = {
+  let ident = row.at("Identification", default: "")
+  if show_hierarchy {
+    let h = row.at("Hierarchy", default: "")
+    if h != "" {
+      text(7pt, fill: gray)[#h] + (if ident != "" { linebreak() + [#ident] } else { [] })
+    } else { [#ident] }
+  } else {
+    [#ident]
+  }
+}
+
+// Linked Schedule-of-Rates item, shown under the Name. The label is injected
+// into the CSV as the "SourceRate" column (computed from the IfcRelAssignsToControl
+// relationship): "<ScheduleOfRates Name> - <control Identification> <control Name>".
+#let source-rate-line(row) = {
+  let s = row.at("SourceRate", default: "")
+  if s != "" { linebreak() + text(7pt, fill: gray)[#s] } else { [] }
+}
+
 #let today-str() = datetime.today().display("[day]/[month]/[year]")
 
 // Standard footer: date on the left, page number on the right.

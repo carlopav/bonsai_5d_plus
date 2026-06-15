@@ -47,7 +47,7 @@
     left: if x == 0 { 1pt } else { 0.25pt },
     right: 1pt, top: 1pt, bottom: 1pt,
   ),
-  [Hierarchy], [Description], [Quantity],
+  [Code], [Description], [Quantity],
   [Total cost (#currency)], [Labor cost (#currency)], [Labor %],
 )
 
@@ -60,7 +60,7 @@
     left: if x == 0 { 1pt } else { 0.25pt },
     right: 1pt, top: 1pt, bottom: 1pt,
   ),
-  text(size: 8pt)[Hierarchy], text(size: 8pt)[Description],
+  text(size: 8pt)[Code], text(size: 8pt)[Description],
   text(size: 8pt)[Total cost (#currency)], text(size: 8pt)[Labor cost (#currency)],
   text(size: 8pt)[Labor %],
 )
@@ -74,8 +74,8 @@
         [], [], [], [], [], [],
       )
       (
-        table.cell(..root-cost-cell-style)[#row.at("Hierarchy")],
-        table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #linebreak() #row.at("Description", default: "")],
+        table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"))],
+        table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")],
         table.cell(..root-cost-cell-style)[],
         table.cell(..root-cost-cell-style)[#strong(format-decimal(total))],
         table.cell(..root-cost-cell-style)[#strong(format-decimal(labor))],
@@ -87,9 +87,6 @@
   } else {
     // COST ITEM
     let name = if row.at("Name") == "" { strong(upper("Unnamed Cost Item")) } else { strong(upper(row.at("Name"))) }
-    let identification = if options.at("should_print_cost_ids") == true and row.at("Identification") != "" {
-      linebreak() + row.at("Identification")
-    } else { "" }
     let description = if options.at("should_print_description") == true and row.at("Description") != "" {
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
@@ -97,8 +94,8 @@
       [#format-decimal(float(row.at("Quantity"))) #fmt-unit(row.at("Unit", default: ""))]
     }
     (
-      row.at("Hierarchy"),
-      name + identification + description,
+      id-cell(row, options.at("should_print_hierarchy")),
+      name + source-rate-line(row) + description,
       table.cell(..total-cell-style, align: right + bottom)[#quant],
       table.cell(..total-cell-style, align: right + bottom)[#format-decimal(total)],
       table.cell(..total-cell-style, align: right + bottom)[#format-decimal(labor)],
@@ -136,7 +133,7 @@
 }
 
 // One summary row per chapter (section), with its aggregated incidence.
-#let arrange_labor_summary_row(row, leaves) = {
+#let arrange_labor_summary_row(row, leaves, show_hierarchy) = {
   if row.at("ItemIsASum") == "True" {
     let h = row.at("Hierarchy")
     let ls = leaves.filter(r => r.at("Hierarchy").starts-with(h + "."))
@@ -145,7 +142,7 @@
     if row.at("Index") == "1" {
       // ROOT CHAPTER
       (
-        strong[#h],
+        strong[#id-cell(row, show_hierarchy)],
         strong(upper(row.at("Name"))),
         strong[#format-decimal(total)],
         strong[#format-decimal(labor)],
@@ -154,7 +151,7 @@
     } else {
       // SUB-SECTION
       (
-        h,
+        id-cell(row, show_hierarchy),
         table.cell(inset: (left: int(row.at("Index")) * 2.5mm))[#upper(row.at("Name"))],
         format-decimal(total),
         format-decimal(labor),
@@ -166,10 +163,10 @@
   }
 }
 
-#let create-summary(path) = {
+#let create-summary(path, show_hierarchy) = {
   let data = csv(path, row-type: dictionary)
   let leaves = data.filter(row => row.at("ItemIsASum") == "False")
-  let new_rows = data.map(item => arrange_labor_summary_row(item, leaves))
+  let new_rows = data.map(item => arrange_labor_summary_row(item, leaves, show_hierarchy))
   let tot_total = leaves.map(leaf-total).sum(default: 0.0)
   let tot_labor = leaves.map(leaf-labor).sum(default: 0.0)
 
@@ -211,7 +208,7 @@
   project_currency: "",
   nested_structure_depth: 0,
   should_print_cover: false,
-  should_print_cost_ids: true,
+  should_print_hierarchy: false,
   should_print_description: false,
   should_print_summary: true,
   body,
@@ -236,7 +233,7 @@
 
   let options = (
     "nested_structure_depth": nested_structure_depth,
-    "should_print_cost_ids": should_print_cost_ids,
+    "should_print_hierarchy": should_print_hierarchy,
     "should_print_description": should_print_description,
   )
 
@@ -245,7 +242,7 @@
   if should_print_summary {
     pagebreak()
     set page(background: place(top + left, dx: 15mm, dy: 25mm, labor_summary_frame(currency: project_currency)))
-    create-summary(schedule_path)
+    create-summary(schedule_path, should_print_hierarchy)
   }
 
   body
