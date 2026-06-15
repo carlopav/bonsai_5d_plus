@@ -578,6 +578,16 @@ class ParserXmlLiguria(PriceListParser):
 
 
 class ParserXmlLombardia(PriceListParser):
+    # dettaglio_voce 'tipologia_risorsa' → IFC category. Composite types (OPERA
+    # COMPIUTA / PRODOTTO IN OPERA / LAVORO PROVVISIONALE) map to "" and keep
+    # their resource breakdown.
+    _TIPOLOGIA_CATEGORY = {
+        "RISORSA UMANA": "Labor",
+        "RISORSA MATERIALE": "Materials",
+        "RISORSA STRUMENTALE PRODUTTIVA": "Equipment",
+        "RISORSA STRUMENTALE TECNOLOGICA": "Equipment",
+    }
+
     def parse_items(self, xml_content):
         xml_content = self.clean_xml_content(xml_content)
         root = self.get_stripped_xml_namespaces_root(xml_content)
@@ -670,13 +680,21 @@ class ParserXmlLombardia(PriceListParser):
             if key2 in level2_idx:
                 parents_parts.append(str(level2_idx[key2]))
 
-            self.xml_rate_list.append({
+            category = self._TIPOLOGIA_CATEGORY.get(
+                det.attrib.get("tipologia_risorsa", "").strip().upper(), ""
+            )
+            item = {
                 "index": index, "level": len(parents_parts), "is_parent": False,
                 "parents": ",".join(parents_parts),
                 "id": codice, "name": desc, "desc": desc, "unit": um,
                 "value": prezzo, "labor": labor,
                 "equipment": 0.0, "materials": 0.0, "safety": 0.0,
-            })
+                "category": category,
+            }
+            # Pure-resource voci → 100% to their category; opere compiute keep the
+            # rapporto_RU/risorse-derived labor share parsed above.
+            apply_resource_category(item)
+            self.xml_rate_list.append(item)
             index += 1
 
     def _parse_format2(self, root):
