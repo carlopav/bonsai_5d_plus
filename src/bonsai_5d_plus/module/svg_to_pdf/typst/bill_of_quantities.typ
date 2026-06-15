@@ -33,12 +33,10 @@
   if type(v) == int or type(v) == float { float(v) } else { none }
 }
 
-// A factor value formatted as a single value: integers without decimals,
-// otherwise up to 4 trimmed decimals (no thousands separator).
-#let fmt-factor(v) = {
-  let r = calc.round(v, digits: 4)
-  if r == calc.round(r, digits: 0) { str(int(r)) } else { str(r) }
-}
+// A decomposition factor rendered as a small single-value cell: a value of 1
+// is shown as "-" (no real subdivision on that axis); any other value is shown
+// with two decimals. One point smaller than the table text to fit the columns.
+#let factor-cell(v) = text(7pt)[#(if v == 1.0 { "-" } else { format-decimal(v, places: 2) })]
 
 // Decompose a "a × b × c × d" formula into its four numeric factors. Returns
 // the four computed values, or () when the formula is not exactly four
@@ -137,7 +135,7 @@
         let parts = formula-parts(f)
         let qty_cell = format-decimal(q.at(1))
         if show_decomp and parts.len() == 4 {
-          ([], qname, fmt-factor(parts.at(0)), fmt-factor(parts.at(1)), fmt-factor(parts.at(2)), fmt-factor(parts.at(3)), qty_cell, [], [])
+          ([], qname, factor-cell(parts.at(0)), factor-cell(parts.at(1)), factor-cell(parts.at(2)), factor-cell(parts.at(3)), qty_cell, [], [])
         } else {
           // No decomposition: show the formula verbatim after the row name.
           let label = if f != "" { qname + " (" + f + ")" } else { qname }
