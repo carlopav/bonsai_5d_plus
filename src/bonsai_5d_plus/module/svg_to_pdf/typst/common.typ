@@ -43,12 +43,13 @@
 #let unit_symbols = (
   // length
   "METRE": "m", "KILO METRE": "km", "DECI METRE": "dm", "CENTI METRE": "cm", "MILLI METRE": "mm",
-  // area
-  "SQUARE_METRE": "m²", "DECI SQUARE_METRE": "dm²", "CENTI SQUARE_METRE": "cm²", "MILLI SQUARE_METRE": "mm²",
+  // area (conversion-unit names we create, plus the prefixed-SI spelling other tools may use)
+  "SQUARE_METRE": "m²", "SQUARE_DECIMETRE": "dm²", "SQUARE_CENTIMETRE": "cm²",
+  "DECI SQUARE_METRE": "dm²", "CENTI SQUARE_METRE": "cm²", "MILLI SQUARE_METRE": "mm²",
   // volume
   "CUBIC_METRE": "m³", "DECI CUBIC_METRE": "dm³", "CENTI CUBIC_METRE": "cm³",
   // mass (tonne kept as "t" rather than the SI "Mg")
-  "GRAM": "g", "KILO GRAM": "kg", "MEGA GRAM": "t",
+  "GRAM": "g", "KILO GRAM": "kg", "MEGA GRAM": "t", "QUINTAL": "q",
   // time
   "HOUR": "h", "MINUTE": "min", "SECOND": "s",
   // compact forms from ifcopenshell.get_unit_symbol

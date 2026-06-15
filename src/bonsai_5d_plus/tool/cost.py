@@ -44,11 +44,36 @@ _UNIT_TO_SI_DESCRIPTOR = {
 }
 
 # unit string → (UnitType, canonical_name, factor, SI_base_UnitType, SI_base_Name, SI_base_Prefix)
+# factor = how many SI-base units one of these equals (e.g. 1 cm² = 0.0001 m²).
+# Area sub-multiples MUST be conversion units, not prefixed IfcSIUnit: ifcopenshell
+# applies an SI prefix linearly even to SQUARE_METRE, so SQUARE_METRE+CENTI would
+# wrongly scale to 0.01 m² instead of 0.0001 m².
 _UNIT_TO_CONVERSION_DESCRIPTOR = {
     "h":   ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
     "ore": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
     "ora": ("TIMEUNIT", "HOUR",   3600.0, "TIMEUNIT", "SECOND", None),
     "min": ("TIMEUNIT", "MINUTE",   60.0, "TIMEUNIT", "SECOND", None),
+    # Area sub-multiples (relative to SQUARE_METRE)
+    "dm2": ("AREAUNIT", "SQUARE_DECIMETRE",  0.01,   "AREAUNIT", "SQUARE_METRE", None),
+    "dmq": ("AREAUNIT", "SQUARE_DECIMETRE",  0.01,   "AREAUNIT", "SQUARE_METRE", None),
+    "dm²": ("AREAUNIT", "SQUARE_DECIMETRE",  0.01,   "AREAUNIT", "SQUARE_METRE", None),
+    "cm2": ("AREAUNIT", "SQUARE_CENTIMETRE", 0.0001, "AREAUNIT", "SQUARE_METRE", None),
+    "cmq": ("AREAUNIT", "SQUARE_CENTIMETRE", 0.0001, "AREAUNIT", "SQUARE_METRE", None),
+    "cm²": ("AREAUNIT", "SQUARE_CENTIMETRE", 0.0001, "AREAUNIT", "SQUARE_METRE", None),
+    # Mass: 1 quintal = 100 kg
+    "q":        ("MASSUNIT", "QUINTAL", 100.0, "MASSUNIT", "GRAM", "KILO"),
+    "quintale": ("MASSUNIT", "QUINTAL", 100.0, "MASSUNIT", "GRAM", "KILO"),
+    "quintali": ("MASSUNIT", "QUINTAL", 100.0, "MASSUNIT", "GRAM", "KILO"),
+}
+
+# UnitType → IfcDimensionalExponents tuple
+# (Length, Mass, Time, ElectricCurrent, Temperature, Substance, Luminous).
+_UNIT_TYPE_EXPONENTS = {
+    "LENGTHUNIT": (1, 0, 0, 0, 0, 0, 0),
+    "AREAUNIT":   (2, 0, 0, 0, 0, 0, 0),
+    "VOLUMEUNIT": (3, 0, 0, 0, 0, 0, 0),
+    "MASSUNIT":   (0, 1, 0, 0, 0, 0, 0),
+    "TIMEUNIT":   (0, 0, 1, 0, 0, 0, 0),
 }
 
 
@@ -84,15 +109,33 @@ def _find_si_unit(file, unit_type, si_name, prefix):
     return None
 
 
+def _get_or_create_si_unit(file, unit_type, si_name, prefix):
+    found = _find_si_unit(file, unit_type, si_name, prefix)
+    if found:
+        return found
+    attrs = {"UnitType": unit_type, "Name": si_name}
+    if prefix:
+        attrs["Prefix"] = prefix
+    return file.create_entity("IfcSIUnit", **attrs)
+
+
+def _make_dimensional_exponents(file, unit_type):
+    e = _UNIT_TYPE_EXPONENTS.get(unit_type, (0, 0, 0, 0, 0, 0, 0))
+    return file.create_entity(
+        "IfcDimensionalExponents",
+        LengthExponent=e[0], MassExponent=e[1], TimeExponent=e[2],
+        ElectricCurrentExponent=e[3], ThermodynamicTemperatureExponent=e[4],
+        AmountOfSubstanceExponent=e[5], LuminousIntensityExponent=e[6],
+    )
+
+
 def get_or_create_unit_entity(file, unit_str):
     """Return an IFC unit entity for unit_str, reusing project units where possible."""
     key = unit_str.lower().strip()
 
     si_desc = _UNIT_TO_SI_DESCRIPTOR.get(key)
     if si_desc:
-        found = _find_si_unit(file, *si_desc)
-        if found:
-            return found
+        return _get_or_create_si_unit(file, *si_desc)
 
     conv_desc = _UNIT_TO_CONVERSION_DESCRIPTOR.get(key)
     if conv_desc:
@@ -100,26 +143,20 @@ def get_or_create_unit_entity(file, unit_str):
         for u in file.by_type("IfcConversionBasedUnit"):
             if u.UnitType == unit_type and (u.Name or "").upper() == name:
                 return u
-        base_si = _find_si_unit(file, base_type, base_name, base_prefix)
-        if base_si:
-            dims = file.create_entity(
-                "IfcDimensionalExponents",
-                LengthExponent=0, MassExponent=0, TimeExponent=1,
-                ElectricCurrentExponent=0, ThermodynamicTemperatureExponent=0,
-                AmountOfSubstanceExponent=0, LuminousIntensityExponent=0,
-            )
-            conversion_factor = file.create_entity(
-                "IfcMeasureWithUnit",
-                ValueComponent=file.create_entity("IfcNumericMeasure", factor),
-                UnitComponent=base_si,
-            )
-            return file.create_entity(
-                "IfcConversionBasedUnit",
-                Dimensions=dims,
-                UnitType=unit_type,
-                Name=name,
-                ConversionFactor=conversion_factor,
-            )
+        base_si = _get_or_create_si_unit(file, base_type, base_name, base_prefix)
+        dims = _make_dimensional_exponents(file, unit_type)
+        conversion_factor = file.create_entity(
+            "IfcMeasureWithUnit",
+            ValueComponent=file.create_entity("IfcNumericMeasure", factor),
+            UnitComponent=base_si,
+        )
+        return file.create_entity(
+            "IfcConversionBasedUnit",
+            Dimensions=dims,
+            UnitType=unit_type,
+            Name=name,
+            ConversionFactor=conversion_factor,
+        )
 
     for ifc_class in ("IfcConversionBasedUnit", "IfcContextDependentUnit"):
         for u in file.by_type(ifc_class):
@@ -171,6 +208,12 @@ _UNIT_TO_IFC_QUANTITY = {
     "mq":    ("IfcQuantityArea",   "AreaValue"),
     "m²":    ("IfcQuantityArea",   "AreaValue"),
     "mq/cm": ("IfcQuantityArea",   "AreaValue"),   # surface × thickness layer; area is the input
+    "dm2":   ("IfcQuantityArea",   "AreaValue"),
+    "dmq":   ("IfcQuantityArea",   "AreaValue"),
+    "dm²":   ("IfcQuantityArea",   "AreaValue"),
+    "cm2":   ("IfcQuantityArea",   "AreaValue"),
+    "cmq":   ("IfcQuantityArea",   "AreaValue"),
+    "cm²":   ("IfcQuantityArea",   "AreaValue"),
     # Volume
     "m3":    ("IfcQuantityVolume", "VolumeValue"),
     "mc":    ("IfcQuantityVolume", "VolumeValue"),
@@ -190,6 +233,8 @@ _UNIT_TO_IFC_QUANTITY = {
     "t":     ("IfcQuantityWeight", "WeightValue"),
     "ton":   ("IfcQuantityWeight", "WeightValue"),
     "q":     ("IfcQuantityWeight", "WeightValue"),
+    "quintale": ("IfcQuantityWeight", "WeightValue"),
+    "quintali": ("IfcQuantityWeight", "WeightValue"),
     "100 kg":("IfcQuantityWeight", "WeightValue"),
     # Time
     "h":     ("IfcQuantityTime",   "TimeValue"),
