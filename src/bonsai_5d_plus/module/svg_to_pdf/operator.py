@@ -65,6 +65,7 @@ def _source_rate_label(ifc, cost_item):
     """Label of the linked price-list item, or "" if none.
 
     Format: "<ScheduleOfRates Name> - <control Identification> <control Name>".
+    The template clips it to a single line at the actual column width.
     """
     ctrl = _rate_controller(cost_item)
     if ctrl is None:

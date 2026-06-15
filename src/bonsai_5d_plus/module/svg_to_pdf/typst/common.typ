@@ -67,7 +67,11 @@
 // relationship): "<ScheduleOfRates Name> - <control Identification> <control Name>".
 #let source-rate-line(row) = {
   let s = row.at("SourceRate", default: "")
-  if s != "" { linebreak() + text(7pt, fill: gray)[#s] } else { [] }
+  // Clip to a single line at the actual column width: whatever does not fit is
+  // truncated (the box keeps the column size, hides the overflow).
+  if s != "" {
+    linebreak() + box(width: 100%, height: 9pt, clip: true)[#text(7pt, fill: gray)[#s]]
+  } else { [] }
 }
 
 #let today-str() = datetime.today().display("[day]/[month]/[year]")
