@@ -52,12 +52,18 @@ class XmlRateItem(TypedDict):
 # specific enough not to collide with composite-work section names.
 _SECTION_CATEGORY_KEYWORDS = (
     ("MANODOPERA", "Labor"),
+    ("MANO D'OPERA", "Labor"),  # DEI XPWE spells it with a space
     ("RISORSE UMANE", "Labor"),
     ("NOLI", "Equipment"),
     ("NOLEGGI", "Equipment"),
     ("SEMILAVORATI", "Materials"),
     ("MATERIALI", "Materials"),
     ("PRODOTTI DA COSTRUZIONE", "Materials"),
+    # Specific phrasing — bare "SICUREZZA" would catch composite works such as
+    # "barriere di sicurezza" (guardrails); the resource sections are the
+    # explicit "SALUTE E SICUREZZA" (Toscana) / "COSTI DELLA SICUREZZA" (PAT).
+    ("SALUTE E SICUREZZA", "Safety"),
+    ("COSTI DELLA SICUREZZA", "Safety"),
 )
 
 # IFC category → XmlRateItem incidence field.
@@ -72,6 +78,10 @@ _CATEGORY_FIELD = {
 def classify_section(desc):
     """Return the IFC cost category for a section description, or "" (composite)."""
     d = (desc or "").upper()
+    # Normalise curly/back apostrophes so "MANO D'OPERA" matches regardless of
+    # how the source encodes the quote.
+    for ch in ("’", "‘", "´", "`"):
+        d = d.replace(ch, "'")
     for keyword, category in _SECTION_CATEGORY_KEYWORDS:
         if keyword in d:
             return category
