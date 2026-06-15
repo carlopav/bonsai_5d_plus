@@ -78,8 +78,34 @@ def _source_rate_label(ifc, cost_item):
     return sor_name or ident
 
 
-def _augment_csv_source_rate(ifc, csv_text):
-    """Add a "SourceRate" column to the ifc5d CSV (linked rate per cost item)."""
+def _rebuild_quantities_json(cost_item):
+    """Re-serialise a cost item's quantities as valid JSON ``[[name, value], …]``.
+
+    ifc5d's own serialiser concatenates the quantity Name without escaping, so
+    names with quotes/special characters (common once measurement rows are
+    imported) produce malformed JSON that Typst cannot parse. We rebuild it.
+    """
+    import json
+
+    out = []
+    for q in (cost_item.CostQuantities or []):
+        if not q.is_a("IfcPhysicalSimpleQuantity"):
+            continue
+        name = q.Name or "Unnamed"
+        try:
+            value = float(q[3]) if q[3] is not None else 0.0
+        except Exception:
+            value = 0.0
+        out.append([name, value])
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _augment_csv(ifc, csv_text):
+    """Post-process the ifc5d CSV per cost item.
+
+    - Add a "SourceRate" column (linked rate via IfcRelAssignsToControl).
+    - Rewrite the "Quantities" column with valid JSON (ifc5d's is unescaped).
+    """
     import csv as _csv
     import io
 
@@ -89,16 +115,28 @@ def _augment_csv_source_rate(ifc, csv_text):
     fieldnames = list(reader.fieldnames)
     if "SourceRate" not in fieldnames:
         fieldnames.append("SourceRate")
+    has_quantities = "Quantities" in fieldnames
 
     rows = []
     for row in reader:
         label = ""
         sid = row.get("Id", "")
+        item = None
         if sid:
             try:
-                label = _source_rate_label(ifc, ifc.by_id(int(sid)))
+                item = ifc.by_id(int(sid))
+            except Exception:
+                item = None
+        if item is not None:
+            try:
+                label = _source_rate_label(ifc, item)
             except Exception:
                 label = ""
+            if has_quantities and row.get("Quantities"):
+                try:
+                    row["Quantities"] = _rebuild_quantities_json(item)
+                except Exception:
+                    pass
         row["SourceRate"] = label
         rows.append(row)
 
@@ -464,7 +502,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
 
         # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
         # "SourceRate" column the templates render under each item's Name.
-        csv_text = _augment_csv_source_rate(ifc, csv_text)
+        csv_text = _augment_csv(ifc, csv_text)
 
         common = dict(
             schedule_path="/schedule.csv",
@@ -590,7 +628,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
 
         # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
         # "SourceRate" column the template renders under each item's Name.
-        csv_text = _augment_csv_source_rate(ifc, csv_text)
+        csv_text = _augment_csv(ifc, csv_text)
 
         body = _tr.show_with(
             "labor_cost_breakdown.typ",
