@@ -434,6 +434,111 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
+    """Export the active Cost Schedule as a Labor Cost Breakdown (Quadro Incidenza Manodopera) PDF."""
+    bl_idname = "bim.export_labor_cost_breakdown_to_pdf"
+    bl_label = "Export Labor Cost Breakdown to PDF"
+    bl_options = {"REGISTER"}
+
+    should_print_description: bpy.props.BoolProperty(name="Show Descriptions", default=False)
+    should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",   default=False)
+    should_print_cost_ids:    bpy.props.BoolProperty(name="Show Item IDs",     default=True)
+    nested_structure_depth:   bpy.props.IntProperty( name="Max Depth (0 = all)", default=0, min=0)
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column(align=True)
+        col.prop(self, "should_print_description")
+        col.prop(self, "should_print_cover")
+        col.prop(self, "should_print_cost_ids")
+        layout.prop(self, "nested_structure_depth")
+
+    def execute(self, context):
+        import tempfile
+
+        if not _ensure_typst():
+            self.report({"ERROR"}, "typst Python package not found. Install it in Blender's Python: pip install typst")
+            return {"CANCELLED"}
+        if not _ensure_ifc5d():
+            self.report({"ERROR"}, "ifc5d module not available (should be bundled with Bonsai).")
+            return {"CANCELLED"}
+
+        # Same ifc5d extraction as the Bill of Quantities; the labor figure is
+        # the "Labor Cost" category column, rolled up by hierarchy in the template.
+        from ifc5d.ifc5Dspreadsheet import Ifc5DCsvWriter
+        from . import typst_render as _tr
+
+        ifc = _get_ifc()
+        ifc_path = _get_ifc_path()
+        if not ifc or not ifc_path:
+            self.report({"ERROR"}, "No IFC file loaded.")
+            return {"CANCELLED"}
+
+        schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+        schedule = ifc.by_id(int(schedule_id))
+        safe_name = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
+        pdf_path = os.path.join(
+            os.path.dirname(os.path.abspath(ifc_path)),
+            f"{safe_name}_incidenza_manodopera.pdf",
+        )
+
+        project_name = ""
+        projects = ifc.by_type("IfcProject")
+        if projects:
+            project_name = projects[0].Name or ""
+        currency = ""
+        monetary = ifc.by_type("IfcMonetaryUnit")
+        if monetary:
+            currency = monetary[0].Currency or ""
+
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                Ifc5DCsvWriter(file=ifc, output=td, cost_schedule=schedule).write()
+            except Exception as e:
+                self.report({"ERROR"}, f"Data extraction failed: {e}")
+                return {"CANCELLED"}
+            csv_files = [f for f in os.listdir(td) if f.lower().endswith(".csv")]
+            if not csv_files:
+                self.report({"ERROR"}, "ifc5d produced no CSV for this schedule.")
+                return {"CANCELLED"}
+            with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
+                csv_text = f.read()
+
+        body = _tr.show_with(
+            "labor_cost_breakdown.typ",
+            schedule_path="/schedule.csv",
+            title=project_name,
+            schedule_name=schedule.Name or "",
+            schedule_description=schedule.Description or "",
+            schedule_type="LABORCOSTBREAKDOWN",
+            project_currency=currency,
+            nested_structure_depth=self.nested_structure_depth,
+            should_print_cover=self.should_print_cover,
+            should_print_cost_ids=self.should_print_cost_ids,
+            should_print_description=self.should_print_description,
+        )
+
+        try:
+            _tr.compile_document(body, {"schedule.csv": csv_text}, pdf_path)
+        except Exception as e:
+            self.report({"ERROR"}, f"PDF generation failed: {e}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Saved: {pdf_path}")
+        _open_file(pdf_path)
+        return {"FINISHED"}
+
+
 import re as _re
 
 _RA_LINE_CATS  = {'Sub-Contract', 'Labor', 'Equipment', 'Material', 'Safety'}
@@ -790,4 +895,4 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]
+classes = [ExportSheetsToPdfOperator, ExportScheduleToPdfOperator, ExportLaborCostBreakdownToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]
