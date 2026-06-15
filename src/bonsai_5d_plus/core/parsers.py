@@ -1156,11 +1156,13 @@ class ParserXmlSix(PriceListParser):
 
         self.default_list_id = self._get_default_quotazione_id(prezzario)
         units = self.get_units(prezzario)
+        specie_categories = self.get_specie_categories(prezzario)
         products = prezzario.findall("prodotto")
         products = sorted(products, key=lambda p: p.attrib.get("prdId", ""))
 
         index = 0
         prdId_to_index = {}
+        prdId_to_category = {}
 
         for product in products:
             prdId = product.attrib.get("prdId", "")
@@ -1179,7 +1181,24 @@ class ParserXmlSix(PriceListParser):
             description = self.clean_string(desc.attrib.get("estesa", "")) if desc is not None else ""
             cost_value = self.get_value(product)
 
-            self.xml_rate_list.append({
+            # Resource category: from the product's <specie> when present
+            # (Manodopera / Noli / Materiali → single category, Opere Compiute →
+            # composite); otherwise inherit from the nearest classified section
+            # title (PAT/Emilia have no specie, only MANODOPERA/NOLI/... titles).
+            # Leaves never self-classify by name, to avoid composite works whose
+            # description merely mentions a resource being mis-attributed.
+            specie_id = product.attrib.get("specieId")
+            if specie_id and specie_id in specie_categories:
+                own_category = specie_categories[specie_id]
+            elif is_parent or product.attrib.get("titolo") == "true":
+                own_category = classify_section(name)
+            else:
+                own_category = ""
+            parent_category = prdId_to_category.get(ancestors[-1], "") if ancestors else ""
+            category = own_category or parent_category
+            prdId_to_category[prdId] = category
+
+            item = {
                 "index": index,
                 "level": level,
                 "is_parent": is_parent,
@@ -1193,7 +1212,12 @@ class ParserXmlSix(PriceListParser):
                 "equipment": self.get_value_component(product, cost_value, "incidenzaAttrezzatura"),
                 "materials": self.get_value_component(product, cost_value, "incidenzaMateriali"),
                 "safety": self._get_safety(product, cost_value),
-            })
+                "category": category,
+            }
+            # Pure-resource items → 100% to their category; composite works keep
+            # the incidenza-derived breakdown parsed above.
+            apply_resource_category(item)
+            self.xml_rate_list.append(item)
             index += 1
 
     def _get_default_quotazione_id(self, prezzario):
@@ -1201,6 +1225,31 @@ class ParserXmlSix(PriceListParser):
         if lista is not None:
             return lista.attrib.get("listaQuotazioneId")
         return None
+
+    # SIX standard 'specie' codes, used as a fallback when the specie has no
+    # description: 10 = Materiali, 20 = Manodopera, 30 = Noli. Composite
+    # ('Opere Compiute', usually 60) and others map to "" (no override).
+    _SIX_SPCID_CATEGORY = {"10": "Materials", "20": "Labor", "30": "Equipment"}
+
+    @staticmethod
+    def get_specie_categories(prezzario):
+        """Map specieId → IFC category from the prezzario's <specie> table.
+
+        SIX groups products by 'specie' (Manodopera / Noli / Materiali / Opere
+        Compiute …). Classify by the specie description, falling back to the
+        standard spcId code; composite species resolve to "" (no override).
+        """
+        categories = {}
+        for specie in prezzario.findall("specie"):
+            sid = specie.attrib.get("specieId")
+            if not sid:
+                continue
+            desc_el = specie.find("spcDescrizione")
+            desc = desc_el.attrib.get("breve", "") if desc_el is not None else ""
+            categories[sid] = classify_section(desc) or ParserXmlSix._SIX_SPCID_CATEGORY.get(
+                specie.attrib.get("spcId", ""), ""
+            )
+        return categories
 
     @staticmethod
     def _get_safety(product, cost_value):
@@ -1266,7 +1315,14 @@ class ParserXmlSix(PriceListParser):
         quotazioni = product.findall("prdQuotazione")
         if not quotazioni:
             return True
-        return all(float(q.attrib.get("valore", 0)) == 0.0 for q in quotazioni)
+
+        def _valore(q):
+            try:
+                return float(q.attrib.get("valore", 0) or 0)
+            except (ValueError, TypeError):
+                return 0.0
+
+        return all(_valore(q) == 0.0 for q in quotazioni)
 
 
 class ParserIfcCostSchedule(PriceListParser):
