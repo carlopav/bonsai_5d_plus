@@ -22,12 +22,35 @@
   align: bottom,
 )
 
-// Split a "a × b × c × d" formula into its four components, or () when the
-// formula is not made of exactly four × -separated parts (shown verbatim then).
+// Evaluate a single arithmetic factor (e.g. "256.667-23") to a number, or none
+// if it is not a safe numeric expression. Only digits and + - * / . ( ) space
+// are allowed, so eval() cannot run arbitrary code.
+#let eval-factor(s) = {
+  let t = s.trim()
+  if t == "" { return none }
+  if t.match(regex("^[\\d\\.\\+\\-\\*/\\(\\)\\s]+$")) == none { return none }
+  let v = eval(t, mode: "code")
+  if type(v) == int or type(v) == float { float(v) } else { none }
+}
+
+// A factor value formatted as a single value: integers without decimals,
+// otherwise up to 4 trimmed decimals (no thousands separator).
+#let fmt-factor(v) = {
+  let r = calc.round(v, digits: 4)
+  if r == calc.round(r, digits: 0) { str(int(r)) } else { str(r) }
+}
+
+// Decompose a "a × b × c × d" formula into its four numeric factors. Returns
+// the four computed values, or () when the formula is not exactly four
+// × -separated parts or any part is not a numeric expression (then the formula
+// is shown verbatim and the columns stay empty — the n/l/w/h columns must
+// always hold a single value, never a fragment of the formula).
 #let formula-parts(f) = {
   if f == "" { return () }
   let parts = f.split("×").map(p => p.trim())
-  if parts.len() == 4 { parts } else { () }
+  if parts.len() != 4 { return () }
+  let vals = parts.map(eval-factor)
+  if vals.any(v => v == none) { () } else { vals }
 }
 
 // — Page frame (drawn in the page background). Widths sum to 185mm. —
@@ -114,7 +137,7 @@
         let parts = formula-parts(f)
         let qty_cell = format-decimal(q.at(1))
         if show_decomp and parts.len() == 4 {
-          ([], qname, parts.at(0), parts.at(1), parts.at(2), parts.at(3), qty_cell, [], [])
+          ([], qname, fmt-factor(parts.at(0)), fmt-factor(parts.at(1)), fmt-factor(parts.at(2)), fmt-factor(parts.at(3)), qty_cell, [], [])
         } else {
           // No decomposition: show the formula verbatim after the row name.
           let label = if f != "" { qname + " (" + f + ")" } else { qname }
