@@ -393,14 +393,22 @@ class ParserXmlToscana(PriceListParser):
             codice_sc = parts[0]
             codice_cat = parts[0] + '.' + parts[1]
 
+            liv1 = articolo.find('livello1')
+            supercat_breve = liv1.attrib.get('descrizionebreve', '') if liv1 is not None else ''
             supercat = (articolo.findtext('tipo') or articolo.findtext('livello1') or '').strip()
             cat = (articolo.findtext('capitolo') or articolo.findtext('livello2') or '').strip()
+            # The livello1 'descrizionebreve' attribute carries the clean section
+            # name (RISORSE UMANE / NOLEGGIO DI ATTREZZATURE / PRODOTTI DA
+            # COSTRUZIONE / SALUTE E SICUREZZA …); fall back to the supercat text
+            # for the PRT and other regional variants without that attribute.
+            section_category = classify_section(supercat_breve or supercat)
 
             if codice_sc not in supercat_idx:
                 self.xml_rate_list.append({
                     "index": index, "level": 0, "is_parent": True, "parents": "",
                     "id": codice_sc, "name": supercat or codice_sc, "desc": "", "unit": "",
                     "value": 0.0, "labor": 0.0, "equipment": 0.0, "materials": 0.0, "safety": 0.0,
+                    "category": section_category,
                 })
                 supercat_idx[codice_sc] = index
                 index += 1
@@ -411,6 +419,7 @@ class ParserXmlToscana(PriceListParser):
                     "parents": str(supercat_idx[codice_sc]),
                     "id": codice_cat, "name": cat or codice_cat, "desc": "", "unit": "",
                     "value": 0.0, "labor": 0.0, "equipment": 0.0, "materials": 0.0, "safety": 0.0,
+                    "category": section_category,
                 })
                 cat_idx[codice_cat] = index
                 index += 1
@@ -436,12 +445,17 @@ class ParserXmlToscana(PriceListParser):
                 except Exception:
                     pass
 
-            self.xml_rate_list.append({
+            item = {
                 "index": index, "level": 2, "is_parent": False,
                 "parents": str(supercat_idx[codice_sc]) + ',' + str(cat_idx[codice_cat]),
                 "id": codice, "name": desc, "desc": desc, "unit": um,
                 "value": prezzo, "labor": labor, "equipment": 0.0, "materials": 0.0, "safety": safety,
-            })
+                "category": section_category,
+            }
+            # Pure-resource sections → 100% to their category; opere compiute keep
+            # the incidenzamanodopera-derived labor share parsed above.
+            apply_resource_category(item)
+            self.xml_rate_list.append(item)
             index += 1
 
     @staticmethod
