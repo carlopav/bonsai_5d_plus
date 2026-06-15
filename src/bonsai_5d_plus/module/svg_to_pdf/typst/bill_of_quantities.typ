@@ -2,6 +2,11 @@
 // Cost items in hierarchy, with quantity breakdown, rate and total, plus a
 // final summary page of section subtotals.
 //
+// The quantity-decomposition columns (n / l / w / h) are optional: when on,
+// each measurement row fills them by splitting its Formula ("NR x L x W x H");
+// when off (default) those columns disappear, the Description column absorbs
+// their width, and any formula is shown in parentheses after the row name.
+//
 // Ported from ifc5d's typst_template_ifc_cost_schedule.typ onto common.typ.
 //
 // author: carlo pavan
@@ -17,18 +22,36 @@
   align: bottom,
 )
 
-// — Page frame (drawn in the page background) —
-#let bill_frame(currency: "") = table(
-  columns: (18mm, 54mm, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm),
-  rows: (6mm, 248mm),
-  align: (center, left, center, center, center, center, center, center, center),
-  stroke: (x, y) => (
-    left: if x == 0 { 1pt } else { 0.25pt },
-    right: 1pt, top: 1pt, bottom: 1pt,
-  ),
-  [Code], [Description], [n°], [l], [w], [h/w], [Quantity],
-  [Rate (#currency)], [Total (#currency)],
-)
+// Split a "a × b × c × d" formula into its four components, or () when the
+// formula is not made of exactly four × -separated parts (shown verbatim then).
+#let formula-parts(f) = {
+  if f == "" { return () }
+  let parts = f.split("×").map(p => p.trim())
+  if parts.len() == 4 { parts } else { () }
+}
+
+// — Page frame (drawn in the page background). Widths sum to 185mm. —
+#let bill_frame(currency: "", show_decomp: false) = {
+  let strk = (x, y) => (left: if x == 0 { 1pt } else { 0.25pt }, right: 1pt, top: 1pt, bottom: 1pt)
+  if show_decomp {
+    table(
+      columns: (18mm, 54mm, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm),
+      rows: (6mm, 248mm),
+      align: (center, left, center, center, center, center, center, center, center),
+      stroke: strk,
+      [Code], [Description], [n°], [l], [w], [h/w], [Quantity],
+      [Rate (#currency)], [Total (#currency)],
+    )
+  } else {
+    table(
+      columns: (18mm, 102mm, 20mm, 20mm, 25mm),
+      rows: (6mm, 248mm),
+      align: (center, left, center, center, center),
+      stroke: strk,
+      [Code], [Description], [Quantity], [Rate (#currency)], [Total (#currency)],
+    )
+  }
+}
 
 #let summary_frame(currency: "") = table(
   columns: (18mm, 107mm, 30mm, 30mm),
@@ -43,28 +66,26 @@
 )
 
 #let arrange_bill_of_quantity_row(row, options) = {
+  let show_decomp = options.at("should_print_qty_decomposition")
+  // Empty decomposition cells, present only in decomposition mode.
+  let mid = if show_decomp { ([], [], [], []) } else { () }
+
   if row.at("ItemIsASum") == "True" {
     // SECTION (parent cost item)
     if options.at("nested_structure_depth") == 0 or int(row.at("Index")) <= options.at("nested_structure_depth") {
       let total_price = format-decimal(float(row.at("TotalPrice", default: "0.0")), places: 2)
-      (
-        [], [], [], [], [], [], [], [], [],
-      )
+      let rblank = table.cell(..root-cost-cell-style)[]
+      let rmid = if show_decomp { (rblank, rblank, rblank, rblank) } else { () }
+      let total_cell = if options.at("should_print_rates") == true {
+        table.cell(..root-cost-cell-style)[#strong(total_price)]
+      } else {
+        table.cell(..root-cost-cell-style)[]
+      }
+      range(if show_decomp { 9 } else { 5 }).map(_ => [])
       (
         table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"))],
         table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")],
-        table.cell(..root-cost-cell-style)[],
-        table.cell(..root-cost-cell-style)[],
-        table.cell(..root-cost-cell-style)[],
-        table.cell(..root-cost-cell-style)[],
-        table.cell(..root-cost-cell-style)[],
-        table.cell(..root-cost-cell-style)[],
-        if options.at("should_print_rates") == true {
-          table.cell(..root-cost-cell-style)[#strong(total_price)]
-        } else {
-          table.cell(..root-cost-cell-style)[]
-        },
-      )
+      ) + rmid + (rblank, rblank, total_cell)
     } else {
       ()
     }
@@ -82,33 +103,34 @@
     } else {
       format-decimal(float(row.at("Quantity")) * float(row.at("RateSubtotal")), places: 2)
     }
-    (
-      id-cell(row, options.at("should_print_hierarchy")),
-      name + source-rate-line(row) + description,
-      [], [], [], [], [], [], [],
-    )
+
+    (id-cell(row, options.at("should_print_hierarchy")), name + source-rate-line(row) + description) + mid + ([], [], [])
+
     if row.at("Quantities") != "" and options.at("should_print_each_quantity") {
       let quantites = json.decode(row.at("Quantities"))
-      for quantity in quantites {
-        (
-          [],
-          if quantity.at(0) == "Unnamed" { [quantity] } else { quantity.at(0) },
-          [], [], [], [],
-          format-decimal(quantity.at(1)),
-          [], [],
-        )
+      for q in quantites {
+        let qname = if q.at(0) == "Unnamed" { "" } else { q.at(0) }
+        let f = q.at(2, default: "")
+        let parts = formula-parts(f)
+        let qty_cell = format-decimal(q.at(1))
+        if show_decomp and parts.len() == 4 {
+          ([], qname, parts.at(0), parts.at(1), parts.at(2), parts.at(3), qty_cell, [], [])
+        } else {
+          // No decomposition: show the formula verbatim after the row name.
+          let label = if f != "" { qname + " (" + f + ")" } else { qname }
+          ([], label) + mid + (qty_cell, [], [])
+        }
       }
     }
+
     if options.at("should_print_rates") == true {
-      (
-        [], unit, [], [], [], [],
+      ([], unit) + mid + (
         table.cell(..total-cell-style, align: right + bottom)[#quant],
         table.cell(..total-cell-style, align: right + bottom)[#rate],
         table.cell(..total-cell-style, align: right + bottom)[#total],
       )
     } else {
-      (
-        [], unit, [], [], [], [],
+      ([], unit) + mid + (
         table.cell(..total-cell-style, align: right + bottom)[#quant],
         [.................],
         [.......................],
@@ -144,11 +166,20 @@
 }
 
 #let create-schedule(path, options) = {
+  let show_decomp = options.at("should_print_qty_decomposition")
   let data = csv(path, row-type: dictionary)
   let new_rows = data.map(item => arrange_bill_of_quantity_row(item, options))
   table(
-    columns: (18mm, 1fr, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm),
-    align: (center, left, center, center, center, center, right, right, right),
+    columns: if show_decomp {
+      (18mm, 1fr, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm)
+    } else {
+      (18mm, 1fr, 20mm, 20mm, 25mm)
+    },
+    align: if show_decomp {
+      (center, left, center, center, center, center, right, right, right)
+    } else {
+      (center, left, right, right, right)
+    },
     stroke: none,
     ..new_rows.flatten()
   )
@@ -204,6 +235,7 @@
   should_print_hierarchy: false,
   should_print_description: false,
   should_print_each_quantity: true,
+  should_print_qty_decomposition: false,
   should_print_rates: true,
   should_print_summary: true,
   body,
@@ -223,7 +255,8 @@
     number-align: end,
     header: std-header(title, schedule_name),
     footer: std-footer(),
-    background: place(top + left, dx: 15mm, dy: 25mm, bill_frame(currency: project_currency)),
+    background: place(top + left, dx: 15mm, dy: 25mm,
+      bill_frame(currency: project_currency, show_decomp: should_print_qty_decomposition)),
   )
 
   let options = (
@@ -231,6 +264,7 @@
     "should_print_hierarchy": should_print_hierarchy,
     "should_print_description": should_print_description,
     "should_print_each_quantity": should_print_each_quantity,
+    "should_print_qty_decomposition": should_print_qty_decomposition,
     "should_print_rates": should_print_rates,
   )
 

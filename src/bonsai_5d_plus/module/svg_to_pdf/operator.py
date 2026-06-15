@@ -96,7 +96,8 @@ def _rebuild_quantities_json(cost_item):
             value = float(q[3]) if q[3] is not None else 0.0
         except Exception:
             value = 0.0
-        out.append([name, value])
+        formula = getattr(q, "Formula", None) or ""
+        out.append([name, value, formula])
     return json.dumps(out, ensure_ascii=False)
 
 
@@ -413,6 +414,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
     should_print_rates:          bpy.props.BoolProperty(name="Show Rates",              default=True)
     should_print_description:    bpy.props.BoolProperty(name="Show Descriptions",       default=False)
     should_print_each_quantity:  bpy.props.BoolProperty(name="Show Quantity Breakdown", default=True)
+    should_print_qty_decomposition: bpy.props.BoolProperty(name="Show Quantity Decomposition", default=False)
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Page",       default=True)
     should_print_cover:          bpy.props.BoolProperty(name="Show Cover Page",         default=False)
     should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
@@ -436,6 +438,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_rates")
         col.prop(self, "should_print_description")
         col.prop(self, "should_print_each_quantity")
+        col.prop(self, "should_print_qty_decomposition")
         col.prop(self, "should_print_summary")
         col.prop(self, "should_print_cover")
         col.prop(self, "should_print_hierarchy")
@@ -527,6 +530,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
                 "bill_of_quantities.typ",
                 nested_structure_depth=self.nested_structure_depth,
                 should_print_each_quantity=self.should_print_each_quantity,
+                should_print_qty_decomposition=self.should_print_qty_decomposition,
                 should_print_summary=self.should_print_summary,
                 # Unpriced BoQ hides the rate/total columns.
                 should_print_rates=self.should_print_rates and doc_type != "UNPRICEDBILLOFQUANTITIES",
