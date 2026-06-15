@@ -440,9 +440,10 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
     bl_label = "Export Labor Cost Breakdown to PDF"
     bl_options = {"REGISTER"}
 
-    should_print_description: bpy.props.BoolProperty(name="Show Descriptions", default=False)
-    should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",   default=False)
-    should_print_cost_ids:    bpy.props.BoolProperty(name="Show Item IDs",     default=True)
+    should_print_description: bpy.props.BoolProperty(name="Show Descriptions",  default=False)
+    should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",    default=False)
+    should_print_cost_ids:    bpy.props.BoolProperty(name="Show Item IDs",      default=True)
+    should_print_summary:     bpy.props.BoolProperty(name="Show Summary Page",  default=True)
     nested_structure_depth:   bpy.props.IntProperty( name="Max Depth (0 = all)", default=0, min=0)
 
     @classmethod
@@ -461,6 +462,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_description")
         col.prop(self, "should_print_cover")
         col.prop(self, "should_print_cost_ids")
+        col.prop(self, "should_print_summary")
         layout.prop(self, "nested_structure_depth")
 
     def execute(self, context):
@@ -526,6 +528,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
             should_print_cover=self.should_print_cover,
             should_print_cost_ids=self.should_print_cost_ids,
             should_print_description=self.should_print_description,
+            should_print_summary=self.should_print_summary,
         )
 
         try:
