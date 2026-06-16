@@ -80,34 +80,10 @@ def _source_rate_label(ifc, cost_item):
     return sor_name
 
 
-def _rebuild_quantities_json(cost_item):
-    """Re-serialise a cost item's quantities as valid JSON ``[[name, value], …]``.
-
-    ifc5d's own serialiser concatenates the quantity Name without escaping, so
-    names with quotes/special characters (common once measurement rows are
-    imported) produce malformed JSON that Typst cannot parse. We rebuild it.
-    """
-    import json
-
-    out = []
-    for q in (cost_item.CostQuantities or []):
-        if not q.is_a("IfcPhysicalSimpleQuantity"):
-            continue
-        name = q.Name or "Unnamed"
-        try:
-            value = float(q[3]) if q[3] is not None else 0.0
-        except Exception:
-            value = 0.0
-        formula = getattr(q, "Formula", None) or ""
-        out.append([name, value, formula])
-    return json.dumps(out, ensure_ascii=False)
-
-
 def _augment_csv(ifc, csv_text):
     """Post-process the ifc5d CSV per cost item.
 
     - Add a "SourceRate" column (linked rate via IfcRelAssignsToControl).
-    - Rewrite the "Quantities" column with valid JSON (ifc5d's is unescaped).
     """
     import csv as _csv
     import io
@@ -118,7 +94,6 @@ def _augment_csv(ifc, csv_text):
     fieldnames = list(reader.fieldnames)
     if "SourceRate" not in fieldnames:
         fieldnames.append("SourceRate")
-    has_quantities = "Quantities" in fieldnames
 
     rows = []
     for row in reader:
@@ -135,11 +110,6 @@ def _augment_csv(ifc, csv_text):
                 label = _source_rate_label(ifc, item)
             except Exception:
                 label = ""
-            if has_quantities and row.get("Quantities"):
-                try:
-                    row["Quantities"] = _rebuild_quantities_json(item)
-                except Exception:
-                    pass
         row["SourceRate"] = label
         rows.append(row)
 
