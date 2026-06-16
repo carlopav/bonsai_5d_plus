@@ -38,17 +38,64 @@
 // with two decimals. One point smaller than the table text to fit the columns.
 #let factor-cell(v) = text(7pt)[#(if v == 1.0 { "-" } else { format-decimal(v, places: 2) })]
 
+// Render already-formatted content in red when its underlying numeric value is
+// negative; otherwise leave it untouched. Used to flag negative quantities and
+// totals throughout the bill.
+#let neg-red(v, body) = if v < 0 { text(red)[#body] } else { [#body] }
+
 // Decompose a "a × b × c × d" formula into its four numeric factors. Returns
 // the four computed values, or () when the formula is not exactly four
 // × -separated parts or any part is not a numeric expression (then the formula
 // is shown verbatim and the columns stay empty — the n/l/w/h columns must
 // always hold a single value, never a fragment of the formula).
+// Labels for the four decomposition columns, used to annotate factors that are
+// expressions rather than plain numbers.
+#let factor-labels = ("n", "l", "w", "h/w")
+
+// When decomposition columns are shown, each n/l/w/h column holds the computed
+// total of its factor. For factors that are expressions (not plain numbers) we
+// also report how that total was obtained next to the description, e.g.
+// "(n=25*0.1) (h/w=15*2)". Plain numbers and trivial "1" factors get no note.
+#let factor-notes(f) = {
+  let parts = f.split("×").map(p => p.trim())
+  if parts.len() != 4 { return "" }
+  let notes = ()
+  for (i, p) in parts.enumerate() {
+    if p.match(regex("^[\\d\\.]+$")) == none {
+      notes.push("(" + factor-labels.at(i) + "=" + p + ")")
+    }
+  }
+  notes.join(" ")
+}
+
 #let formula-parts(f) = {
   if f == "" { return () }
   let parts = f.split("×").map(p => p.trim())
   if parts.len() != 4 { return () }
   let vals = parts.map(eval-factor)
   if vals.any(v => v == none) { () } else { vals }
+}
+
+// The portion of a formula worth showing verbatim next to the quantity, or ""
+// when nothing meaningful remains. When the formula is the expected product of
+// numeric factors, trivial "1" factors carry no information and are dropped, so
+// "(409.172-60) × 1 × 1 × 1" collapses to "(409.172-60)", and a result made of a
+// single plain number (e.g. "5") only repeats the quantity and is hidden. When
+// the formula is not in that expected shape — any factor isn't a numeric
+// expression — it is shown in full, since we can't tell which parts matter.
+#let formula-display(f) = {
+  let t = f.trim()
+  if t == "" { return "" }
+  let parts = t.split("×").map(p => p.trim()).filter(p => p != "")
+  // Unexpected format: any non-numeric factor → show the formula in full.
+  if parts.any(p => eval-factor(p) == none) { return t }
+  // Drop trivial "1" factors.
+  let informative = parts.filter(p => eval-factor(p) != 1.0)
+  if informative.len() == 0 { return "" }
+  if informative.len() == 1 and informative.at(0).match(regex("^[\\d\\.]+$")) != none {
+    return ""
+  }
+  informative.join(" × ")
 }
 
 // — Page frame (drawn in the page background). Widths sum to 185mm. —
@@ -117,13 +164,12 @@
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
     let unit = table.cell(align: right)[Sum #fmt-unit(row.at("Unit", default: ""))]
-    let quant = if row.at("Quantity") == "" { 0.0 } else { format-decimal(float(row.at("Quantity"))) }
-    let rate = if row.at("RateSubtotal") == "" { 0.0 } else { format-decimal(float(row.at("RateSubtotal"))) }
-    let total = if row.at("Quantity") == "" or row.at("RateSubtotal") == "" {
-      format-decimal(0.0, places: 2)
-    } else {
-      format-decimal(float(row.at("Quantity")) * float(row.at("RateSubtotal")), places: 2)
-    }
+    let quant_v = if row.at("Quantity") == "" { 0.0 } else { float(row.at("Quantity")) }
+    let rate_v = if row.at("RateSubtotal") == "" { 0.0 } else { float(row.at("RateSubtotal")) }
+    let total_v = quant_v * rate_v
+    let quant = format-decimal(quant_v)
+    let rate = format-decimal(rate_v)
+    let total = format-decimal(total_v, places: 2)
 
     (id-cell(row, options.at("should_print_hierarchy")), name + source-rate-line(row) + description) + mid + ([], [], [])
 
@@ -133,12 +179,16 @@
         let qname = if q.at(0) == "Unnamed" { "" } else { q.at(0) }
         let f = q.at(2, default: "")
         let parts = formula-parts(f)
-        let qty_cell = format-decimal(q.at(1))
+        let qty_cell = neg-red(q.at(1), format-decimal(q.at(1)))
         if show_decomp and parts.len() == 4 {
-          ([], qname, factor-cell(parts.at(0)), factor-cell(parts.at(1)), factor-cell(parts.at(2)), factor-cell(parts.at(3)), qty_cell, [], [])
+          let notes = factor-notes(f)
+          let label = if notes != "" { (qname + " " + notes).trim() } else { qname }
+          ([], label, factor-cell(parts.at(0)), factor-cell(parts.at(1)), factor-cell(parts.at(2)), factor-cell(parts.at(3)), qty_cell, [], [])
         } else {
-          // No decomposition: show the formula verbatim after the row name.
-          let label = if f != "" { qname + " (" + f + ")" } else { qname }
+          // No decomposition: show the significant part of the formula after the
+          // row name, dropping trivial "1" factors and redundant single numbers.
+          let shown = formula-display(f)
+          let label = if shown != "" { qname + " (" + shown + ")" } else { qname }
           ([], label) + mid + (qty_cell, [], [])
         }
       }
@@ -146,13 +196,13 @@
 
     if options.at("should_print_rates") == true {
       ([], unit) + mid + (
-        table.cell(..total-cell-style, align: right + bottom)[#quant],
-        table.cell(..total-cell-style, align: right + bottom)[#rate],
-        table.cell(..total-cell-style, align: right + bottom)[#total],
+        table.cell(..total-cell-style, align: right + bottom)[#neg-red(quant_v, quant)],
+        table.cell(..total-cell-style, align: right + bottom)[#neg-red(rate_v, rate)],
+        table.cell(..total-cell-style, align: right + bottom)[#neg-red(total_v, total)],
       )
     } else {
       ([], unit) + mid + (
-        table.cell(..total-cell-style, align: right + bottom)[#quant],
+        table.cell(..total-cell-style, align: right + bottom)[#neg-red(quant_v, quant)],
         [.................],
         [.......................],
       )
