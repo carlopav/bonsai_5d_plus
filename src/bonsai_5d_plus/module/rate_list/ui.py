@@ -7,7 +7,6 @@ import json
 import bpy
 
 from . import data as _data
-from .data import _invalidate_filter_cache
 from .operator import (
     ImportRateList,
     UpdateActiveCostItem,

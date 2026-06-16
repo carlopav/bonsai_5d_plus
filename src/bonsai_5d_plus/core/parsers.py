@@ -1345,7 +1345,6 @@ class ParserXmlSix(PriceListParser):
             return ""
 
     def get_value(self, product):
-        prezzo = 0.0
         quotazioni = product.findall("prdQuotazione")
         if not quotazioni:
             return 0.0

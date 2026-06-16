@@ -374,7 +374,6 @@ def create_cost_item(file, selected_rate, create_new_item=True, combine_desc=Fal
     import bpy
     from bonsai import tool
     import ifcopenshell.util.cost
-    import bonsai.bim.module.cost.data
 
     active_ui_cost_item = bpy.context.scene.BIMCostProperties.active_cost_item
     active_ifc_cost_item = file.by_id(active_ui_cost_item.ifc_definition_id)
@@ -433,7 +432,6 @@ def build_schedule_from_xpwe(parser, schedule_name, report=None, flatten=True):
     """
     try:
         from bonsai import tool
-        import bonsai.bim.module.cost.data
     except ImportError as e:
         if report:
             report({'ERROR'}, f"Bonsai not available: {e}")
@@ -523,7 +521,6 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
     try:
         from bonsai import tool
         from bonsai.core import cost as cost_core
-        import bonsai.bim.module.cost.data
     except ImportError as e:
         if report:
             report({'ERROR'}, f"Bonsai not available: {e}")
