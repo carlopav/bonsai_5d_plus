@@ -6,9 +6,10 @@
 import os
 
 import bpy
-from bpy_extras.io_utils import ImportHelper
+from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ...core.parsers import ParserXpwe, PriceListParser
+from ...core.exporters import export_cost_schedule_to_xpwe
 from ...tool.cost import build_schedule_from_xpwe, build_cme_schedule
 
 
@@ -78,12 +79,24 @@ class ImportXpweCostSchedule(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
-class ExportXpweCostSchedule(bpy.types.Operator):
-    """Export the active IFC cost schedule to XPWE format."""
+class ExportXpweCostSchedule(bpy.types.Operator, ExportHelper):
+    """Export the active IFC cost schedule (CME/BoQ) to an XPWE file.
+
+    The active schedule drives the computo (PweVociComputo); its items' prices
+    form the price list (PweElencoPrezzi), taken from the linked Schedule-of-Rates
+    when present, otherwise synthesised from the items themselves.
+    """
 
     bl_idname = "bonsai5d.export_xpwe_cost_schedule"
     bl_label = "Export XPWE"
     bl_options = {"REGISTER"}
+
+    filename_ext = ".xpwe"
+    filter_glob: bpy.props.StringProperty(
+        default="*.xpwe;*.xml",
+        options={"HIDDEN"},
+        maxlen=255,
+    )
 
     @classmethod
     def poll(cls, context):
@@ -92,9 +105,50 @@ class ExportXpweCostSchedule(bpy.types.Operator):
         except Exception:
             return False
 
+    def invoke(self, context, event):
+        # Seed the filename from the active schedule's name.
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            sid = context.scene.BIMCostProperties.active_cost_schedule_id
+            schedule = file.by_id(sid)
+            self.filepath = (schedule.Name or "cost_schedule") + ".xpwe"
+        except Exception:
+            self.filepath = "cost_schedule.xpwe"
+        return ExportHelper.invoke(self, context, event)
+
     def execute(self, context):
-        self.report({'WARNING'}, "XPWE export not yet implemented")
-        return {"CANCELLED"}
+        try:
+            from bonsai import tool
+        except ImportError as e:
+            self.report({'ERROR'}, f"Bonsai not available: {e}")
+            return {"CANCELLED"}
+
+        file = tool.Ifc.get()
+        if file is None:
+            self.report({'ERROR'}, "No IFC file loaded")
+            return {"CANCELLED"}
+
+        sid = context.scene.BIMCostProperties.active_cost_schedule_id
+        schedule = file.by_id(sid)
+        if schedule is None:
+            self.report({'ERROR'}, "No active cost schedule")
+            return {"CANCELLED"}
+
+        try:
+            xml_text = export_cost_schedule_to_xpwe(
+                file, schedule, filename=os.path.basename(self.filepath)
+            )
+        except Exception as e:
+            import traceback
+            self.report({'ERROR'}, f"XPWE export failed: {e}\n{traceback.format_exc()}")
+            return {"CANCELLED"}
+
+        with open(self.filepath, "w", encoding="utf-8") as f:
+            f.write(xml_text)
+
+        self.report({'INFO'}, f"Exported XPWE: {os.path.basename(self.filepath)}")
+        return {"FINISHED"}
 
 
 classes = [ImportXpweCostSchedule, ExportXpweCostSchedule]
