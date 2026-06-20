@@ -5,7 +5,9 @@
 
 import time as _time
 
-SOURCE_TYPES = {"PRICEDBILLOFQUANTITIES", "UNPRICEDBILLOFQUANTITIES"}
+from ...tool.cost import PRICED_BOQ_TYPES
+
+SOURCE_TYPES = {*PRICED_BOQ_TYPES, "UNPRICEDBILLOFQUANTITIES"}
 
 _ENUM_TTL = 1.0  # seconds before enum caches rebuild
 

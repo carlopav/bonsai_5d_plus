@@ -21,6 +21,13 @@
 import json
 
 
+# IfcCostSchedule.PredefinedType values handled as a priced Bill of Quantities:
+# the proper priced BoQ plus cost estimates (ESTIMATE), cost plans (COSTPLAN) and
+# budgets (BUDGET), which carry priced cost items with quantities and so use the
+# same handling and PDF template. Single source of truth shared across modules.
+PRICED_BOQ_TYPES = ("PRICEDBILLOFQUANTITIES", "ESTIMATE", "COSTPLAN", "BUDGET")
+
+
 # ---------------------------------------------------------------------------
 # Unit resolution helpers (shared with rate_analysis)
 # ---------------------------------------------------------------------------
