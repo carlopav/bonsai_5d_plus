@@ -320,6 +320,146 @@ def remove_all_cost_values(tool, item):
 
 
 # ---------------------------------------------------------------------------
+# EPU -> CME rate synchronisation
+#
+# A CME/BoQ cost item borrows its price from a rate item (EPU/Schedule of
+# Rates) via IfcRelAssignsToControl + shared IfcCostValue entities (Bonsai's
+# assign_cost_value). The rate is the single source of truth (one-way EPU->CME).
+# Rewriting a rate's cost values replaces the entities and breaks the share, so
+# after any rate edit we re-share the values and (on demand) propagate Name /
+# Description / Identification to the dependents.
+# ---------------------------------------------------------------------------
+
+def get_cost_item_schedule(item):
+    """The IfcCostSchedule an IfcCostItem belongs to (walks up the nesting)."""
+    for rel in (item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+            return rel.RelatingControl
+    for rel in (item.Nests or []):
+        return get_cost_item_schedule(rel.RelatingObject)
+    return None
+
+
+def get_rate_controller(item):
+    """The rate IfcCostItem controlling this one (IfcRelAssignsToControl), or None."""
+    for rel in (item.HasAssignments or []):
+        if rel.is_a("IfcRelAssignsToControl"):
+            ctrl = rel.RelatingControl
+            if ctrl.is_a("IfcCostItem"):
+                return ctrl
+    return None
+
+
+def get_rate_dependents(rate_item):
+    """Cost items controlled by this rate item (via IfcRelAssignsToControl)."""
+    return [
+        obj
+        for rel in (getattr(rate_item, "Controls", None) or [])
+        for obj in (rel.RelatedObjects or [])
+        if obj.is_a("IfcCostItem")
+    ]
+
+
+def _same_cost_values(a, b):
+    """True if two cost items reference the exact same IfcCostValue entities."""
+    return [cv.id() for cv in (a.CostValues or [])] == [cv.id() for cv in (b.CostValues or [])]
+
+
+def rate_dependent_diffs(rate_item):
+    """Attributes out of sync between the rate and at least one dependent.
+
+    Returns a subset of {"name", "description", "value"}.
+    """
+    diffs = set()
+    for dep in get_rate_dependents(rate_item):
+        if (dep.Name or "") != (rate_item.Name or ""):
+            diffs.add("name")
+        if (dep.Description or "") != (rate_item.Description or ""):
+            diffs.add("description")
+        if not _same_cost_values(dep, rate_item):
+            diffs.add("value")
+    return diffs
+
+
+def is_item_in_sync(item):
+    """For a CME item linked to a rate: True if name/description/value all match.
+
+    Returns None when the item has no rate controller (not applicable).
+    """
+    rate = get_rate_controller(item)
+    if rate is None:
+        return None
+    return (
+        (item.Name or "") == (rate.Name or "")
+        and (item.Description or "") == (rate.Description or "")
+        and _same_cost_values(item, rate)
+    )
+
+
+def group_dependents_by_schedule(rate_item):
+    """Return [(schedule, [dependents])], grouping a rate's dependents by schedule.
+
+    ``schedule`` is the IfcCostSchedule entity (None when unresolvable); order is
+    stable by first appearance.
+    """
+    groups = {}
+    order = []
+    for dep in get_rate_dependents(rate_item):
+        sch = get_cost_item_schedule(dep)
+        key = sch.id() if sch is not None else 0
+        if key not in groups:
+            groups[key] = (sch, [])
+            order.append(key)
+        groups[key][1].append(dep)
+    return [groups[k] for k in order]
+
+
+def resync_rate_values(tool, rate_item):
+    """Re-share the rate's current CostValues onto every dependent (silent).
+
+    Uses Bonsai's native cost.assign_cost_value so dependents point at the same
+    IfcCostValue entities again. Returns the number of dependents.
+    """
+    deps = get_rate_dependents(rate_item)
+    for dep in deps:
+        if not _same_cost_values(dep, rate_item):
+            tool.Ifc.run("cost.assign_cost_value", cost_item=dep, cost_rate=rate_item)
+    return len(deps)
+
+
+def propagate_rate_to_dependents(tool, rate_item, with_identification=False):
+    """Propagate the rate to its dependents: re-share values + copy Name and
+    Description (and Identification when requested). Returns the dependent count.
+    """
+    deps = get_rate_dependents(rate_item)
+    for dep in deps:
+        if not _same_cost_values(dep, rate_item):
+            tool.Ifc.run("cost.assign_cost_value", cost_item=dep, cost_rate=rate_item)
+        attrs = {"Name": rate_item.Name, "Description": rate_item.Description}
+        if with_identification:
+            attrs["Identification"] = rate_item.Identification
+        tool.Ifc.run("cost.edit_cost_item", cost_item=dep, attributes=attrs)
+    return len(deps)
+
+
+def align_item_to_rate(tool, item, with_identification=False):
+    """Pull a single CME item back in line with its controlling rate: re-share
+    values + copy Name/Description (and Identification when requested). Returns
+    False when the item has no rate controller.
+    """
+    rate = get_rate_controller(item)
+    if rate is None:
+        return False
+    if not _same_cost_values(item, rate):
+        tool.Ifc.run("cost.assign_cost_value", cost_item=item, cost_rate=rate)
+    attrs = {"Name": rate.Name, "Description": rate.Description}
+    if with_identification:
+        attrs["Identification"] = rate.Identification
+    tool.Ifc.run("cost.edit_cost_item", cost_item=item, attributes=attrs)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Cost value writers
 # ---------------------------------------------------------------------------
 
@@ -340,6 +480,8 @@ def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
         [("Labor", 30.0), ("Equipment", 0.0), ("Material", 60.0), ("Safety", 10.0)]
     """
     if total_value == 0.0:
+        # Keep any dependents aligned with the (now empty) rate too.
+        resync_rate_values(tool, cost_item)
         return
 
     active = [(cat, amt) for cat, amt in incidences if amt != 0.0]
@@ -358,6 +500,10 @@ def write_epu_cost_values(file, tool, cost_item, total_value, unit, incidences):
             attributes["Category"] = category
         tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes=attributes)
         set_unit_basis(file, cv, 1.0, unit)
+
+    # Re-share the freshly written values onto any control-linked dependents
+    # (the rewrite above replaced the entities, breaking the previous share).
+    resync_rate_values(tool, cost_item)
 
 
 # ---------------------------------------------------------------------------

@@ -41,9 +41,11 @@ from .module import (
     svg_to_pdf,
     import_export,
     reorder_schedule,
+    cost_sync,
 )
 
 _MODULES = [
+    cost_sync,        # operators only (no panel); used by the Cost Item Editor
     rate_analysis,
     rate_list,
     classification,

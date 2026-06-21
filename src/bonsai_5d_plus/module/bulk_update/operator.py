@@ -5,7 +5,7 @@
 
 import bpy
 from . import data as _data
-from ...tool.cost import refresh_cost_ui
+from ...tool.cost import refresh_cost_ui, resync_rate_values
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -107,6 +107,9 @@ class BulkUpdateCostSchedule(*_IfcOperatorBase):
                 tool.Ifc.run("cost.edit_cost_value", cost_value=cost_value,
                     attributes={"AppliedValue": rate["value"]})
 
+            # If this item is a rate controlling CME items, keep them in sync
+            # (the rewrite above replaced the shared cost-value entities).
+            resync_rate_values(tool, ifc_item)
             count += 1
 
         refresh_cost_ui(tool)

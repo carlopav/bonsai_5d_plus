@@ -13,6 +13,51 @@ from .operator import (
     _QTY_UNIT_ABBR,
     _compute_partial_qty,
 )
+from ...tool.cost import (
+    get_rate_controller,
+    get_rate_dependents,
+    group_dependents_by_schedule,
+    rate_dependent_diffs,
+    is_item_in_sync,
+    get_cost_item_schedule,
+)
+
+
+def _target_item(context):
+    """The IfcCostItem currently loaded in the Cost Item Editor, or None."""
+    try:
+        from bonsai import tool
+        file = tool.Ifc.get()
+        tid = getattr(context.window_manager, "rate_analysis_target_ifc_id", 0)
+        if file and tid:
+            return file.by_id(int(tid))
+    except Exception:
+        pass
+    return None
+
+
+def _draw_rate_link_header(layout, context):
+    """One-line rate-link status for the active cost item (header)."""
+    item = _target_item(context)
+    if item is None:
+        return
+    ctrl = get_rate_controller(item)
+    if ctrl is not None:
+        synced = is_item_in_sync(item)
+        sor = get_cost_item_schedule(ctrl)
+        sor_name = (sor.Name if sor is not None else "") or "rate"
+        ident = ctrl.Identification or ""
+        label = f"Rate: {sor_name}" + (f"  [{ident}]" if ident else "")
+        layout.label(text=label, icon="CHECKMARK" if synced else "ERROR")
+        return
+    deps = get_rate_dependents(item)
+    if deps:
+        groups = group_dependents_by_schedule(item)
+        in_sync = not rate_dependent_diffs(item)
+        layout.label(
+            text=f"Controls {len(deps)} item(s) in {len(groups)} schedule(s)",
+            icon="CHECKMARK" if in_sync else "ERROR",
+        )
 
 
 class RATE_UL_analysis(bpy.types.UIList):
@@ -85,6 +130,7 @@ class CostItemEditorPanel(bpy.types.Panel):
             except Exception as e:
                 sched_label = f"Cost Schedule: (error: {e})"
             layout.label(text=sched_label, icon="SPREADSHEET")
+            _draw_rate_link_header(layout, context)
 
 
 class CIE_PT_Identification(bpy.types.Panel):
@@ -307,4 +353,70 @@ class CIE_PT_Quantities(bpy.types.Panel):
         row.operator("cost_quantities.apply", text="Apply Quantities", icon="EXPORT")
 
 
-classes = [RATE_UL_analysis, MEAS_UL_rows, CostItemEditorPanel, CIE_PT_Identification, CIE_PT_RateAnalysis, CIE_PT_Quantities]
+class CIE_PT_RateSync(bpy.types.Panel):
+    bl_label = "Rate Sync"
+    bl_idname = "SCENE_PT_cie_rate_sync"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Bonsai5D+"
+    bl_parent_id = "SCENE_PT_cost_item_editor"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        item = _target_item(context)
+
+        if item is not None:
+            ctrl = get_rate_controller(item)
+            if ctrl is not None:
+                # This item borrows its price from a rate.
+                synced = is_item_in_sync(item)
+                sor = get_cost_item_schedule(ctrl)
+                sor_name = (sor.Name if sor is not None else "") or "rate"
+                ident = ctrl.Identification or ""
+                box = layout.box()
+                box.label(
+                    text=f"Linked rate: {sor_name}" + (f"  [{ident}]" if ident else ""),
+                    icon="CHECKMARK" if synced else "ERROR",
+                )
+                if synced is False:
+                    op = box.operator("bonsai5d.resync_from_rate",
+                                      text="Resync from rate", icon="FILE_REFRESH")
+                    op.item_id = item.id()
+
+            deps = get_rate_dependents(item)
+            if deps:
+                # This item is a rate controlling other (CME) items.
+                groups = group_dependents_by_schedule(item)
+                diffs = rate_dependent_diffs(item)
+                box = layout.box()
+                hrow = box.row()
+                hrow.label(text=f"Controls {len(deps)} item(s):")
+                if diffs:
+                    hrow.label(text="out of sync", icon="ERROR")
+                else:
+                    hrow.label(text="in sync", icon="CHECKMARK")
+                for schedule, items in groups:
+                    name = (schedule.Name if schedule is not None else None) or "(no schedule)"
+                    n = len(items)
+                    box.label(text=f"   • {name}:  {n} item{'s' if n != 1 else ''}")
+                row = box.row(align=True)
+                op = row.operator("bonsai5d.propagate_rate",
+                                  text="Propagate now…", icon="EXPORT")
+                op.rate_id = item.id()
+                op = row.operator("bonsai5d.resync_rate_values",
+                                  text="Resync values", icon="FILE_REFRESH")
+                op.rate_id = item.id()
+
+            if get_rate_controller(item) is None and not get_rate_dependents(item):
+                layout.label(text="No rate link on this item", icon="UNLINKED")
+        else:
+            layout.label(text="No active cost item")
+
+        layout.separator(factor=0.5)
+        row = layout.row(align=True)
+        row.operator("bonsai5d.audit_schedule", text="Audit schedule", icon="VIEWZOOM")
+        row.operator("bonsai5d.resync_schedule", text="Resync all", icon="FILE_REFRESH")
+
+
+classes = [RATE_UL_analysis, MEAS_UL_rows, CostItemEditorPanel, CIE_PT_Identification, CIE_PT_RateAnalysis, CIE_PT_Quantities, CIE_PT_RateSync]

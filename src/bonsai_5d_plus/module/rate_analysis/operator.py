@@ -14,7 +14,10 @@ from ...tool.cost import (
     set_unit_basis,
     ifc_unit_to_str,
     ifc_quantity_type,
+    get_rate_dependents,
+    resync_rate_values,
 )
+from ..cost_sync.operator import schedule_propagate_popup
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -708,6 +711,9 @@ class RA_OT_ApplyItemInfo(*_IfcOperatorBase):
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
         _write_cost_item_info(tool, cost_item, wm)
         refresh_cost_ui(tool)
+        # If this item is a rate controlling CME items, offer to propagate.
+        if get_rate_dependents(cost_item):
+            schedule_propagate_popup(cost_item.id())
 
 
 class RA_OT_ApplyToIfc(*_IfcOperatorBase):
@@ -773,7 +779,12 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         cv_summary.Components = sub_cvs
         cost_item.CostValues = [cv_summary]
 
+        # The rewrite above replaced the cost-value entities; re-share them onto
+        # any control-linked dependents and offer to propagate name/description.
+        resync_rate_values(tool, cost_item)
         refresh_cost_ui(tool)
+        if get_rate_dependents(cost_item):
+            schedule_propagate_popup(cost_item.id())
 
 
 def _find_parent_and_index(file, props):
