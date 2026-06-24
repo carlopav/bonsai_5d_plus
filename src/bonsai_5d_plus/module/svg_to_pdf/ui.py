@@ -21,8 +21,6 @@ class SvgToPdfPanel(bpy.types.Panel):
             layout.label(text="No IFC file loaded.", icon="ERROR")
             return
 
-        layout.operator("bim.export_sheets_to_pdf",        icon="FILE_BLANK")
-        layout.separator(factor=0.5)
         layout.operator("bim.export_schedule_to_pdf",      icon="FILE_TEXT")
         layout.separator(factor=0.5)
         layout.operator("bim.export_labor_cost_breakdown_to_pdf", icon="COMMUNITY")
