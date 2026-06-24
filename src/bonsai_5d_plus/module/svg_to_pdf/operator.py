@@ -185,6 +185,16 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Page",       default=True)
     should_print_cover:          bpy.props.BoolProperty(name="Show Cover Page",         default=False)
     should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
+    should_move_identification:  bpy.props.BoolProperty(
+        name="Identification in Description column",
+        description=(
+            "For self-contained BoQs where the Identification holds the price-list code: "
+            "show each cost item's Identification above its Name in the Description column, "
+            "leaving the generated hierarchy code alone in the first column. "
+            "Requires Hierarchy Renumbering"
+        ),
+        default=False,
+    )
     nested_structure_depth:      bpy.props.IntProperty( name="Max Depth (0 = all)",     default=0, min=0)
 
     @classmethod
@@ -209,6 +219,9 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_summary")
         col.prop(self, "should_print_cover")
         col.prop(self, "should_print_hierarchy")
+        sub = col.column(align=True)
+        sub.enabled = self.should_print_hierarchy
+        sub.prop(self, "should_move_identification")
         layout.prop(self, "nested_structure_depth")
 
     # ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
@@ -290,6 +303,9 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             should_print_hierarchy=self.should_print_hierarchy,
             should_print_description=self.should_print_description,
         )
+        # Moving the Identification into the Description column only makes sense
+        # together with the generated hierarchy code; gate it on that here too.
+        move_identification = self.should_move_identification and self.should_print_hierarchy
 
         if doc_type == "SCHEDULEOFRATES":
             body = _tr.show_with(
@@ -301,6 +317,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             body = _tr.show_with(
                 "bill_of_quantities.typ",
                 nested_structure_depth=self.nested_structure_depth,
+                should_move_identification=move_identification,
                 should_print_each_quantity=self.should_print_each_quantity,
                 should_print_qty_decomposition=self.should_print_qty_decomposition,
                 should_print_summary=self.should_print_summary,

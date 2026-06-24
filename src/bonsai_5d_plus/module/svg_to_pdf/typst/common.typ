@@ -68,12 +68,17 @@
 // First-column cell: the cost item's Identification, optionally prefixed by the
 // hierarchical renumbering (the CSV "Hierarchy" column) when it is enabled.
 // Identification is always shown; the hierarchy number, when on, sits above it.
-#let id-cell(row, show_hierarchy) = {
+// When `move_ident` is set (only used by the bill, and only together with
+// hierarchy renumbering), the Identification is instead rendered in the
+// Description column, so the first column carries only the generated code.
+#let id-cell(row, show_hierarchy, move_ident: false) = {
   let ident = row.at("Identification", default: "")
   if show_hierarchy {
     let h = row.at("Hierarchy", default: "")
-    if h != "" {
-      text(7pt, fill: gray)[#h] + (if ident != "" { linebreak() + [#ident] } else { [] })
+    if move_ident {
+      if h != "" { text(7pt)[#h] } else { [] }
+    } else if h != "" {
+      text(7pt)[#h] + (if ident != "" { linebreak() + [#ident] } else { [] })
     } else { [#ident] }
   } else {
     [#ident]

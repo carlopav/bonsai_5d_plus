@@ -19,7 +19,7 @@
 #let root-cost-cell-style = (
   stroke: (bottom: (thickness: 0.4pt, dash: "dotted")),
   fill: gray.transparentize(90%),
-  align: bottom,
+  align: top,
 )
 
 // Evaluate a single arithmetic factor (e.g. "256.667-23") to a number, or none
@@ -50,6 +50,20 @@
 // (~three spaces). Tune `indent-unit` to taste.
 #let indent-unit = 2.25mm
 #let row-indent(row) = (int(row.at("Index", default: "1")) - 1) * indent-unit
+
+// When the "move Identification" option is on (only for leaf cost items, and
+// only together with hierarchy renumbering — which then owns the generated code
+// in the first column), the item's Identification (typically the price-list
+// code) is shown at the top of the Description column, above the Name on its own
+// line, in black and between square brackets. Rendered at the same size as the
+// first-column hierarchy code (7pt) so the two stay aligned on the row's first
+// line. Returns the identification line + a linebreak, or empty content.
+#let ident-prefix(row, move_ident) = {
+  if move_ident {
+    let ident = row.at("Identification", default: "")
+    if ident != "" { text(7pt, "[" + ident + "]") + linebreak() } else { [] }
+  } else { [] }
+}
 
 // Decompose a "a × b × c × d" formula into its four numeric factors. Returns
 // the four computed values, or () when the formula is not exactly four
@@ -145,6 +159,10 @@
   let show_decomp = options.at("should_print_qty_decomposition")
   // Empty decomposition cells, present only in decomposition mode.
   let mid = if show_decomp { ([], [], [], []) } else { () }
+  // Move the Identification into the Description column (leaf items) and hide it
+  // for summary costs: it is only meaningful for leaf cost items, and only when
+  // the hierarchy renumbering owns the generated first-column code.
+  let move_ident = options.at("should_move_identification") and options.at("should_print_hierarchy")
 
   if row.at("ItemIsASum") == "True" {
     // SECTION (parent cost item)
@@ -159,7 +177,7 @@
       }
       range(if show_decomp { 9 } else { 5 }).map(_ => [])
       (
-        table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"))],
+        table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"), move_ident: move_ident)],
         table.cell(..root-cost-cell-style)[#pad(left: row-indent(row))[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")]],
       ) + rmid + (rblank, rblank, total_cell)
     } else {
@@ -179,7 +197,7 @@
     let rate = format-decimal(rate_v)
     let total = format-decimal(total_v, places: 2)
 
-    (id-cell(row, options.at("should_print_hierarchy")), pad(left: row-indent(row))[#(name + source-rate-line(row) + description)]) + mid + ([], [], [])
+    (id-cell(row, options.at("should_print_hierarchy"), move_ident: move_ident), pad(left: row-indent(row))[#(ident-prefix(row, move_ident) + name + source-rate-line(row) + description)]) + mid + ([], [], [])
 
     if row.at("Quantities") != "" and options.at("should_print_each_quantity") {
       let quantites = json.decode(row.at("Quantities"))
@@ -312,6 +330,7 @@
   nested_structure_depth: 0,
   should_print_cover: false,
   should_print_hierarchy: false,
+  should_move_identification: false,
   should_print_description: false,
   should_print_each_quantity: true,
   should_print_qty_decomposition: false,
@@ -341,6 +360,7 @@
   let options = (
     "nested_structure_depth": nested_structure_depth,
     "should_print_hierarchy": should_print_hierarchy,
+    "should_move_identification": should_move_identification,
     "should_print_description": should_print_description,
     "should_print_each_quantity": should_print_each_quantity,
     "should_print_qty_decomposition": should_print_qty_decomposition,
