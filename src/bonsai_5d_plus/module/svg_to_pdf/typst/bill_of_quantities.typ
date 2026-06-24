@@ -237,11 +237,15 @@
 }
 
 #let arrange_summary_row(row, options) = {
+  // The summary only lists summary costs, which never carry a meaningful code.
+  // So whenever hierarchy renumbering is on (the generated code owns the first
+  // column), hide the Identification here and show only the hierarchy number.
+  let move_ident = options.at("should_print_hierarchy")
   if row.at("ItemIsASum") == "True" {
     if row.at("Index") == "1" {
       // ROOT COST
       (
-        strong[#id-cell(row, options.at("should_print_hierarchy"))],
+        strong[#id-cell(row, options.at("should_print_hierarchy"), move_ident: move_ident)],
         strong(upper(row.at("Name"))),
         [],
         if options.at("should_print_rates") {
@@ -251,7 +255,7 @@
     } else {
       // SUB-SECTION
       (
-        id-cell(row, options.at("should_print_hierarchy")),
+        id-cell(row, options.at("should_print_hierarchy"), move_ident: move_ident),
         table.cell(inset: (left: int(row.at("Index")) * 2.5mm))[#upper(row.at("Name"))],
         if options.at("should_print_rates") { format-decimal(float(row.at("TotalPrice")), places: 2) } else { [] },
         [],
