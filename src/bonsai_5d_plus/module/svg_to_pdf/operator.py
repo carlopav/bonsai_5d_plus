@@ -196,6 +196,15 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         default=False,
     )
     nested_structure_depth:      bpy.props.IntProperty( name="Max Depth (0 = all)",     default=0, min=0)
+    page_break_level:            bpy.props.IntProperty(
+        name="Summary Cost to New Page",
+        description=(
+            "Start a new page before each summary cost down to this hierarchy level "
+            "(0 = no page breaks / current behaviour; 1 = first level; 2 = first and "
+            "second level; and so on)"
+        ),
+        default=0, min=0, max=9,
+    )
 
     @classmethod
     def poll(cls, context):
@@ -223,6 +232,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         sub.enabled = self.should_print_hierarchy
         sub.prop(self, "should_move_identification")
         layout.prop(self, "nested_structure_depth")
+        layout.prop(self, "page_break_level")
 
     # ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
     # they route to the bill_of_quantities template with rates, keeping their own
@@ -317,6 +327,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             body = _tr.show_with(
                 "bill_of_quantities.typ",
                 nested_structure_depth=self.nested_structure_depth,
+                page_break_level=self.page_break_level,
                 should_move_identification=move_identification,
                 should_print_each_quantity=self.should_print_each_quantity,
                 should_print_qty_decomposition=self.should_print_qty_decomposition,

@@ -269,21 +269,51 @@
 #let create-schedule(path, options) = {
   let show_decomp = options.at("should_print_qty_decomposition")
   let data = csv(path, row-type: dictionary)
-  let new_rows = data.map(item => arrange_bill_of_quantity_row(item, options))
-  table(
-    columns: if show_decomp {
-      (18mm, 1fr, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm)
-    } else {
-      (18mm, 1fr, 20mm, 20mm, 25mm)
-    },
-    align: if show_decomp {
-      (center, left, center, center, center, center, right, right, right)
-    } else {
-      (center, left, right, right, right)
-    },
-    stroke: none,
-    ..new_rows.flatten()
-  )
+  let cols = if show_decomp {
+    (18mm, 1fr, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm)
+  } else {
+    (18mm, 1fr, 20mm, 20mm, 25mm)
+  }
+  let aln = if show_decomp {
+    (center, left, center, center, center, center, right, right, right)
+  } else {
+    (center, left, right, right, right)
+  }
+
+  // Page-break level: 0 keeps a single flowing table (current behaviour); N > 0
+  // starts a new page before every *rendered* summary cost whose hierarchy depth
+  // (Index, root = 1) is <= N. A single table cannot be split by a pagebreak, so
+  // the rows are grouped into one table per page; the background frame repeats
+  // automatically on each page.
+  //
+  // A break is only taken when the current group already holds at least one leaf
+  // cost item: this keeps consecutive summary headers (a parent and its first
+  // sub-section) together instead of orphaning a header alone at the foot of a
+  // page, so every page break lands on actual priced content.
+  let break_level = options.at("page_break_level", default: 0)
+
+  let groups = ()
+  let current = ()
+  let has_leaf = false
+  for item in data {
+    let cells = arrange_bill_of_quantity_row(item, options)
+    let is_sum = item.at("ItemIsASum") == "True"
+    let lvl = int(item.at("Index", default: "1"))
+    let rendered = cells.len() > 0
+    if break_level > 0 and is_sum and rendered and lvl <= break_level and has_leaf {
+      groups.push(current)
+      current = ()
+      has_leaf = false
+    }
+    current = current + cells
+    if rendered and not is_sum { has_leaf = true }
+  }
+  if current.len() > 0 { groups.push(current) }
+
+  for (i, g) in groups.enumerate() {
+    if i > 0 { pagebreak(weak: true) }
+    table(columns: cols, align: aln, stroke: none, ..g.flatten())
+  }
 }
 
 #let create-summary(path, options, currency: "") = {
@@ -332,6 +362,7 @@
   schedule_type: "PRICEDBILLOFQUANTITIES",
   project_currency: "",
   nested_structure_depth: 0,
+  page_break_level: 0,
   should_print_cover: false,
   should_print_hierarchy: false,
   should_move_identification: false,
@@ -363,6 +394,7 @@
 
   let options = (
     "nested_structure_depth": nested_structure_depth,
+    "page_break_level": page_break_level,
     "should_print_hierarchy": should_print_hierarchy,
     "should_move_identification": should_move_identification,
     "should_print_description": should_print_description,
