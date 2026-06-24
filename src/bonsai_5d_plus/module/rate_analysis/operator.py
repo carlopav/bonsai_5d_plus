@@ -315,7 +315,9 @@ def _load_quantities(context, cost_item=None):
     type_detected = False
     for q in (cost_item.CostQuantities or []):
         row = wm.cost_quantities.add()
-        row.qty_desc = q.Name or ""
+        # "Unnamed" is the blank-name sentinel written on apply; show it empty.
+        _qname = q.Name or ""
+        row.qty_desc = "" if _qname == "Unnamed" else _qname
         row.ifc_id = q.id()
         ifc_type = q.is_a()
         type_id = _QTY_FROM_IFC.get(ifc_type, 'COUNT')
@@ -1129,7 +1131,11 @@ class QTY_OT_Apply(*_IfcOperatorBase):
         for row in wm.cost_quantities:
             partial = _compute_partial_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
             kw = {
-                "Name": row.qty_desc or None,
+                # IfcPhysicalQuantity.Name is a mandatory attribute; a None name
+                # produces a malformed quantity that crashes downstream readers
+                # (e.g. ifc5d serialise_cost_quantities). Use the "Unnamed"
+                # sentinel that ifc5d/the BoQ template already treat as blank.
+                "Name": row.qty_desc or "Unnamed",
                 val_attr: round(partial, 6),
             }
             formula = _build_formula_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
