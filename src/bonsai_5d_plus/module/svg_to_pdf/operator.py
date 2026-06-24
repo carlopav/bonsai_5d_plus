@@ -173,6 +173,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
             ("ESTIMATE",                "Estimate",                   ""),
             ("COSTPLAN",                "Cost Plan",                  ""),
             ("BUDGET",                  "Budget",                     ""),
+            ("TENDER",                  "Tender",                     ""),
             ("SCHEDULEOFRATES",         "Schedule of Rates",          ""),
         ],
         default="AUTO",
@@ -210,9 +211,12 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_hierarchy")
         layout.prop(self, "nested_structure_depth")
 
-    # ESTIMATE / COSTPLAN are priced BoQ-like (see PRICED_BOQ_TYPES): they route
-    # to the bill_of_quantities template with rates, keeping their own type label.
-    _HANDLED_TYPES = (*PRICED_BOQ_TYPES, "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
+    # ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
+    # they route to the bill_of_quantities template with rates, keeping their own
+    # type label. TENDER renders the same way (a bidder's priced BoQ) but is kept
+    # out of PRICED_BOQ_TYPES so it is not treated as a valid source elsewhere
+    # (BoQ->SoR conversion, tender generation).
+    _HANDLED_TYPES = (*PRICED_BOQ_TYPES, "TENDER", "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
 
     def execute(self, context):
         import tempfile

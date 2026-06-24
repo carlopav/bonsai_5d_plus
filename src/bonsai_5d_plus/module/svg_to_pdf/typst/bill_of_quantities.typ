@@ -43,6 +43,14 @@
 // totals throughout the bill.
 #let neg-red(v, body) = if v < 0 { text(red)[#body] } else { [#body] }
 
+// Left indent reflecting a row's depth in the cost hierarchy, applied to the
+// Description column so the whole bill — sections, cost-item names and their
+// descriptions/measurements — is visually oriented like the summary, not only
+// the summary page. `Index` is 1 for the root; each nested level adds one unit
+// (~three spaces). Tune `indent-unit` to taste.
+#let indent-unit = 2.25mm
+#let row-indent(row) = (int(row.at("Index", default: "1")) - 1) * indent-unit
+
 // Decompose a "a × b × c × d" formula into its four numeric factors. Returns
 // the four computed values, or () when the formula is not exactly four
 // × -separated parts or any part is not a numeric expression (then the formula
@@ -152,7 +160,7 @@
       range(if show_decomp { 9 } else { 5 }).map(_ => [])
       (
         table.cell(..root-cost-cell-style)[#id-cell(row, options.at("should_print_hierarchy"))],
-        table.cell(..root-cost-cell-style)[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")],
+        table.cell(..root-cost-cell-style)[#pad(left: row-indent(row))[#strong(upper(row.at("Name"))) #source-rate-line(row) #linebreak() #row.at("Description", default: "")]],
       ) + rmid + (rblank, rblank, total_cell)
     } else {
       ()
@@ -171,7 +179,7 @@
     let rate = format-decimal(rate_v)
     let total = format-decimal(total_v, places: 2)
 
-    (id-cell(row, options.at("should_print_hierarchy")), name + source-rate-line(row) + description) + mid + ([], [], [])
+    (id-cell(row, options.at("should_print_hierarchy")), pad(left: row-indent(row))[#(name + source-rate-line(row) + description)]) + mid + ([], [], [])
 
     if row.at("Quantities") != "" and options.at("should_print_each_quantity") {
       let quantites = json.decode(row.at("Quantities"))
@@ -183,13 +191,13 @@
         if show_decomp and parts.len() == 4 {
           let notes = factor-notes(f)
           let label = if notes != "" { (qname + " " + notes).trim() } else { qname }
-          ([], label, factor-cell(parts.at(0)), factor-cell(parts.at(1)), factor-cell(parts.at(2)), factor-cell(parts.at(3)), qty_cell, [], [])
+          ([], pad(left: row-indent(row))[#label], factor-cell(parts.at(0)), factor-cell(parts.at(1)), factor-cell(parts.at(2)), factor-cell(parts.at(3)), qty_cell, [], [])
         } else {
           // No decomposition: show the significant part of the formula after the
           // row name, dropping trivial "1" factors and redundant single numbers.
           let shown = formula-display(f)
           let label = if shown != "" { qname + " (" + shown + ")" } else { qname }
-          ([], label) + mid + (qty_cell, [], [])
+          ([], pad(left: row-indent(row))[#label]) + mid + (qty_cell, [], [])
         }
       }
     }
