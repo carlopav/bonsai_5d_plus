@@ -32,6 +32,7 @@ bl_info = {
 import traceback
 
 from .module import (
+    app_tabs,
     rate_list,
     rate_analysis,
     boq_to_sor,
@@ -46,6 +47,7 @@ from .module import (
 )
 
 _MODULES = [
+    app_tabs,         # tab bar + Scene.bonsai5d_tab; must register first
     cost_sync,        # operators only (no panel); used by the Cost Item Editor
     rate_analysis,
     rate_list,

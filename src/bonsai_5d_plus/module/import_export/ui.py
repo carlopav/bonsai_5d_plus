@@ -4,6 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
+from ..app_tabs.ui import tab_active
 from .operator import ImportXpweCostSchedule, ExportXpweCostSchedule
 
 
@@ -14,6 +15,10 @@ class ImportExportPanel(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
     bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        return tab_active(context, "IO")
 
     def draw(self, context):
         layout = self.layout

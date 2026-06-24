@@ -5,6 +5,7 @@
 
 import textwrap
 import bpy
+from ..app_tabs.ui import tab_active
 from .data import (
     _SYSTEMS, _BY_CODE, _DESCRIPTIONS, _CLASSIFICATIONS_DIR,
     _prop_name, _get_code, _build_summary,
@@ -18,6 +19,10 @@ class CostClassificationPanel(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
     bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        return tab_active(context, "COST")
 
     def draw(self, context):
         layout = self.layout

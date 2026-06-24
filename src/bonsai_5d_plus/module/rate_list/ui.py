@@ -6,6 +6,7 @@
 import json
 import bpy
 
+from ..app_tabs.ui import tab_active
 from . import data as _data
 from .operator import (
     ImportRateList,
@@ -118,6 +119,10 @@ class RateListPanel(bpy.types.Panel):
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
     bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        return tab_active(context, "RATES")
 
     def draw(self, context):
         layout = self.layout

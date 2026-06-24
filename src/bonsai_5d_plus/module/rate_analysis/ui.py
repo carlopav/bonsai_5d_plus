@@ -5,6 +5,7 @@
 
 import bpy
 
+from ..app_tabs.ui import tab_active
 from .operator import (
     COMPONENT_CATEGORIES,
     _get_totals,
@@ -90,6 +91,11 @@ class CostItemEditorPanel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
+
+    @classmethod
+    def poll(cls, context):
+        return tab_active(context, "COST")
+
     def draw(self, context):
         layout = self.layout
         wm = context.window_manager
