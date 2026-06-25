@@ -112,7 +112,7 @@ blender.exe --background --python tools/generate_classifications.py
 
 ## Dipendenze
 
-- [Bonsai BIM](https://bonsaibim.org) (addon Blender)
+- [Bonsai BIM](https://bonsaibim.org) (addon Blender) — **build giornaliera/alpha dal 17/06/2026 in poi** (`alpha260617+`). L'export PDF del computo richiede i fix `ifc5d` mergiati in ifcopenshell il 16/06/2026 ([#8175](https://github.com/IfcOpenShell/IfcOpenShell/pull/8175) escape dei nomi quantità, [#8176](https://github.com/IfcOpenShell/IfcOpenShell/pull/8176) formula nelle quantità). Con build precedenti la stampa della BoQ fallisce con un errore di parsing JSON.
 - [ifcopenshell](https://ifcopenshell.org) (incluso in Bonsai)
 - Blender 4.0 o superiore
 
@@ -149,3 +149,5 @@ blender.exe --background --python tools/generate_classifications.py
 - **Bulk Update Cost Schedule** — batch-updates unit prices in the active Cost Schedule from the loaded price list, with a preview before applying.
 
 - **Cost Item Classification** — assigns classification codes (SOA, DM17, TOL) to IFC cost items and generates a financial summary by category with amounts and percentages. Classification systems are loaded automatically from IFC4X3 files in `src/data/classifications/`. The TOL system covers all 20 Tipologie Omogenee di Lavorazione defined in GU 31-12-2024 n.305.
+
+**Requirements:** Blender 4.0+ and a recent Bonsai BIM **daily/alpha build from 2026-06-17 onward** (`alpha260617+`). PDF export of the bill of quantities relies on the `ifc5d` fixes merged into ifcopenshell on 2026-06-16 ([#8175](https://github.com/IfcOpenShell/IfcOpenShell/pull/8175) escape quantity names, [#8176](https://github.com/IfcOpenShell/IfcOpenShell/pull/8176) include the quantity formula); with older builds the BoQ print fails with a JSON parsing error.
