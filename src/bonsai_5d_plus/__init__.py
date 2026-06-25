@@ -42,7 +42,6 @@ from .module import (
     import_export,
     reorder_schedule,
     cost_sync,
-    sheets_to_pdf,
 )
 
 _MODULES = [
@@ -54,7 +53,6 @@ _MODULES = [
     svg_to_pdf,
     import_export,
     boq_to_sor,   # Sandbox (must be last so panel appears at bottom of sidebar)
-    sheets_to_pdf,  # Sandbox sub-panel; slated to move out of this add-on
     bulk_update,
     reorder_schedule,
 ]
