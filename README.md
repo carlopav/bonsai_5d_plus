@@ -97,10 +97,27 @@ python tools/build_release.py
 Produce `dist/bonsai_5d_plus-X.Y.Z.zip` con la struttura corretta per Blender. La versione viene letta automaticamente da `__init__.py`.
 
 ### Per lo sviluppo (symlink)
+`Su WINDOWS`
 ```
 mklink /J "%APPDATA%\Blender Foundation\Blender\<versione>\scripts\addons\bonsai_5d_plus" "<percorso_repo>\src\bonsai_5d_plus"
 ```
 Abilitare l'addon in *Edit > Preferences > Add-ons* cercando **Bonsai5D+**.
+
+`Su LINUX`
+
+Il comando mklink /J mostrato sopra funziona solo su Windows. Su Linux usa invece un symlink, puntando alla sottocartella src/bonsai_5d_plus (non alla radice del repo):
+
+```
+mkdir -p ~/.config/blender/4.2/scripts/addons
+ln -s /percorso/assoluto/di/bonsai_5d_plus/src/bonsai_5d_plus \
+      ~/.config/blender/4.2/scripts/addons/bonsai_5d_plus
+```
+Note:
+
+Usa un percorso assoluto per la sorgente — i symlink relativi spesso si rompono.
+Assicurati che il link punti a src/bonsai_5d_plus (dove si trova __init__.py), non alla radice del repo — è un errore comune che fa sì che l'add-on non venga trovato.
+Modifica 4.2 con la tua versione di Blender.
+Riavvia Blender, poi vai su Edit > Preferences > Add-ons, clicca l'icona di refresh e cerca "Bonsai5D+".
 
 ### Rigenerare i file di classificazione
 I file IFC in `src/data/classifications/` sono già inclusi nel repository. Per rigenerarli (ad esempio dopo aver modificato le categorie):
