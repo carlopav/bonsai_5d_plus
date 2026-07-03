@@ -84,6 +84,9 @@ class CostClassificationPanel(bpy.types.Panel):
         layout.label(text="Riepilogo schedule:", icon="LINENUMBERS_ON")
         layout.prop(context.scene, "cc_summary_system", text="Sistema")
 
+        row = layout.row()
+        row.operator("cost_classification.export_excel", text="Export to excel")
+
         summary_key = context.scene.cc_summary_system
         if summary_key not in _SYSTEMS:
             return
