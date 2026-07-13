@@ -459,6 +459,48 @@ def align_item_to_rate(tool, item, with_identification=False):
     return True
 
 
+def detach_shared_cost_values(tool, item):
+    """Replace item's CostValues with independent deep copies, so it no
+    longer shares IfcCostValue entities with any rate controller."""
+    import ifcopenshell.util.element as element_util
+    file = tool.Ifc.get()
+    new_values = [element_util.copy_deep(file, cv) for cv in (item.CostValues or [])]
+    item.CostValues = new_values if new_values else None
+
+
+def unlink_from_rate(tool, item, copy_info=False):
+    """Detach item from its rate controller. If copy_info, first copies the
+    controller's Name/Description onto item (like align_item_to_rate).
+    Returns False if item has no controller.
+    """
+    ctrl = get_rate_controller(item)
+    if ctrl is None:
+        return False
+    if copy_info:
+        tool.Ifc.run("cost.edit_cost_item", cost_item=item,
+                      attributes={"Name": ctrl.Name, "Description": ctrl.Description})
+    detach_shared_cost_values(tool, item)
+    tool.Ifc.run("control.unassign_control", relating_control=ctrl, related_objects=[item])
+    return True
+
+
+def duplicate_and_relink_rate(tool, item):
+    """Deep-copy item's rate controller (as a sibling in its SOR schedule)
+    and relink item to the copy. Returns the new rate item, or None if item
+    has no controller.
+    """
+    from bonsai.core import cost as cost_core
+    ctrl = get_rate_controller(item)
+    if ctrl is None:
+        return None
+    new_ctrl = tool.Ifc.run("cost.copy_cost_item", cost_item=ctrl)
+    ident = new_ctrl.Identification
+    tool.Ifc.run("cost.edit_cost_item", cost_item=new_ctrl,
+                  attributes={"Identification": f"{ident}-copy" if ident else ident})
+    cost_core.assign_cost_value(tool.Ifc, tool.Cost, cost_item=item, cost_rate=new_ctrl)
+    return new_ctrl
+
+
 # ---------------------------------------------------------------------------
 # Cost value writers
 # ---------------------------------------------------------------------------

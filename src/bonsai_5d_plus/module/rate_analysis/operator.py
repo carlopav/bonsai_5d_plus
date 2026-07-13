@@ -16,6 +16,9 @@ from ...tool.cost import (
     ifc_quantity_type,
     get_rate_dependents,
     resync_rate_values,
+    get_rate_controller,
+    unlink_from_rate,
+    duplicate_and_relink_rate,
 )
 from ..cost_sync.operator import schedule_propagate_popup
 
@@ -835,62 +838,8 @@ def _select_and_load(context, ifc_id):
     _load_cost_item(context, ifc_id)
 
 
-class RA_OT_AddSummaryCost(*_IfcOperatorBase):
-    bl_idname = "rate_analysis.add_summary_cost"
-    bl_label = "Add Summary Cost"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def description(cls, context, properties):
-        return (
-            "Add a summary cost item (Category='*', sums child values) "
-            "at the same level as the active one. "
-            "If no item is active, adds at the root of the schedule."
-        )
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
-        except Exception:
-            return False
-
-    def _execute(self, context):
-        from bonsai import tool
-
-
-        file = tool.Ifc.get()
-        props = context.scene.BIMCostProperties
-        schedule = file.by_id(int(props.active_cost_schedule_id))
-
-        # Find where to insert: sibling of active item, or root if none active
-        parent_item = None
-        try:
-            active_id = props.active_cost_item.ifc_definition_id
-            if active_id:
-                active = file.by_id(active_id)
-                for rel in (active.Nests or []):
-                    obj = rel.RelatingObject
-                    if obj.is_a("IfcCostItem"):
-                        parent_item = obj
-                    break
-        except Exception:
-            pass
-
-        if parent_item:
-            new_item = tool.Ifc.run("cost.add_cost_item", cost_item=parent_item)
-        else:
-            new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
-
-        cv = tool.Ifc.run("cost.add_cost_value", parent=new_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={"Category": "*"})
-
-        refresh_cost_ui(tool)
-        _select_and_load(context, new_item.id())
-
-
 class RA_OT_AddCostItem(*_IfcOperatorBase):
-    """Add a plain cost item relative to the active one."""
+    """Add a cost item (plain or summary) relative to the active one."""
     bl_idname = "rate_analysis.add_cost_item"
     bl_label = "Add Cost Item"
     bl_options = {'REGISTER', 'UNDO'}
@@ -904,14 +853,21 @@ class RA_OT_AddCostItem(*_IfcOperatorBase):
         default='AFTER',
         options={'SKIP_SAVE'},
     )
+    summary: bpy.props.BoolProperty(
+        name="Summary",
+        description="Add a summary cost item (Category='*', sums child values) instead of a plain one",
+        default=False,
+        options={'SKIP_SAVE'},
+    )
 
     @classmethod
     def description(cls, context, properties):
+        kind = "summary cost item (Category='*', sums child values)" if properties.summary else "cost item"
         return {
-            'BEFORE': "Insert a new cost item before the active one (same level)",
-            'AFTER':  "Insert a new cost item after the active one (same level)",
-            'CHILD':  "Insert a new cost item as a child of the active one",
-        }.get(properties.position, "Add cost item")
+            'BEFORE': f"Insert a new {kind} before the active one (same level)",
+            'AFTER':  f"Insert a new {kind} after the active one (same level)",
+            'CHILD':  f"Insert a new {kind} as a child of the active one",
+        }.get(properties.position, f"Add {kind}")
 
     @classmethod
     def poll(cls, context):
@@ -946,6 +902,10 @@ class RA_OT_AddCostItem(*_IfcOperatorBase):
                 _reorder_after_add(parent_item, new_item, insert_index)
             else:
                 new_item = tool.Ifc.run("cost.add_cost_item", cost_schedule=schedule)
+
+        if self.summary:
+            cv = tool.Ifc.run("cost.add_cost_value", parent=new_item)
+            tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={"Category": "*"})
 
         refresh_cost_ui(tool)
         _select_and_load(context, new_item.id())
@@ -997,6 +957,83 @@ class RA_OT_LoadController(*_IfcOperatorBase):
         controller = _get_cost_item_controller(cost_item)
         if controller:
             _load_cost_item(context, item_id=controller.id())
+
+
+class RA_OT_UnlinkFromRate(*_IfcOperatorBase):
+    """Detach the active cost item from its rate controller, keeping its
+    current values as an independent copy."""
+    bl_idname = "rate_analysis.unlink_from_rate"
+    bl_label = "Unlink from Rate"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            item_id = context.window_manager.rate_analysis_target_ifc_id
+            if not file or not item_id:
+                return False
+            return get_rate_controller(file.by_id(item_id)) is not None
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        if unlink_from_rate(tool, cost_item, copy_info=False):
+            refresh_cost_ui(tool)
+            _load_cost_item(context, cost_item.id())
+        else:
+            self.report({"ERROR"}, "Item has no rate controller")
+
+
+class RA_OT_MakeUnique(*_IfcOperatorBase):
+    """Detach the active cost item from its rate controller, first copying
+    the controller's Name/Description onto it."""
+    bl_idname = "rate_analysis.make_unique"
+    bl_label = "Make Unique"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return RA_OT_UnlinkFromRate.poll(context)
+
+    def _execute(self, context):
+        from bonsai import tool
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        if unlink_from_rate(tool, cost_item, copy_info=True):
+            refresh_cost_ui(tool)
+            _load_cost_item(context, cost_item.id())
+        else:
+            self.report({"ERROR"}, "Item has no rate controller")
+
+
+class RA_OT_DuplicateRate(*_IfcOperatorBase):
+    """Duplicate the active cost item's rate controller and relink the item
+    to the copy, so it can diverge from the shared rate without affecting it."""
+    bl_idname = "rate_analysis.duplicate_rate"
+    bl_label = "Duplicate Rate"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return RA_OT_UnlinkFromRate.poll(context)
+
+    def _execute(self, context):
+        from bonsai import tool
+        file = tool.Ifc.get()
+        wm = context.window_manager
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        if duplicate_and_relink_rate(tool, cost_item) is not None:
+            refresh_cost_ui(tool)
+            _load_cost_item(context, cost_item.id())
+        else:
+            self.report({"ERROR"}, "Item has no rate controller")
 
 
 class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
@@ -1161,10 +1198,12 @@ classes = [
     RA_OT_SyncItemInfo,
     RA_OT_ApplyItemInfo,
     RA_OT_ApplyToIfc,
-    RA_OT_AddSummaryCost,
     RA_OT_AddCostItem,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,
+    RA_OT_UnlinkFromRate,
+    RA_OT_MakeUnique,
+    RA_OT_DuplicateRate,
     RA_OT_AddZeroQuantity,
     QTY_OT_AddRow,
     QTY_OT_RemoveRow,
