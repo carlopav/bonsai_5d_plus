@@ -273,19 +273,18 @@ def _compute_partial_qty(nr, l, b, h):
 
 
 def _build_formula_qty(nr, l, b, h):
-    """Build 'NR × L × B × H' string from non-zero fields."""
-    parts = []
-    for v in (nr, l, b, h):
-        if v != 0.0:
-            parts.append(f"{v:g}")
-    return " × ".join(parts)
+    """Build 'NR × L × B × H', one factor per fixed position, so each factor's
+    column is preserved on reload. Returns "" when all four fields are blank."""
+    if nr == 0.0 and l == 0.0 and b == 0.0 and h == 0.0:
+        return ""
+    return " × ".join(f"{v:g}" for v in (nr, l, b, h))
 
 
 def _parse_formula_qty(formula_str):
     """Parse 'NR × L × B × H' → (nr, l, b, h); missing/unparseable fields → 0.0."""
     if not formula_str:
         return 0.0, 0.0, 0.0, 0.0
-    parts = [p.strip() for p in formula_str.split("×") if p.strip()]
+    parts = [p.strip() for p in formula_str.split("×")]
     vals = []
     for p in parts[:4]:
         try:
