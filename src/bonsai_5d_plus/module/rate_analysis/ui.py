@@ -162,12 +162,12 @@ class CostItemEditorPanel(bpy.types.Panel):
             _draw_identification(panel, context)
 
         header, panel = box2.panel("cie_rate_analysis", default_closed=True)
-        header.label(text="Rate Analysis")
+        header.label(text="Cost Value")
         if panel:
-            _draw_rate_analysis(panel, context)
+            _draw_cost_value(panel, context)
 
         header, panel = box2.panel("cie_quantities", default_closed=True)
-        header.label(text="Quantities")
+        header.label(text="Cost Quantities")
         if panel:
             _draw_quantities(panel, context)
 
@@ -204,10 +204,71 @@ def _draw_identification(layout, context):
     row.operator("rate_analysis.apply_item_info", text="Apply Description", icon="CHECKMARK")
 
 
-def _draw_rate_analysis(layout, context):
+def _draw_cost_value(layout, context):
     wm = context.window_manager
 
     row = layout.row(align=True)
+    row.prop_enum(wm, "cost_value_mode", 'SUM')
+    row.prop_enum(wm, "cost_value_mode", 'FIXED')
+    row.prop_enum(wm, "cost_value_mode", 'RATE_ANALYSIS')
+    layout.separator(factor=0.3)
+
+    item = _target_item(context)
+    deps = get_rate_dependents(item) if item is not None else []
+    if deps:
+        layout.label(text=f"Cost value controls {len(deps)} other value(s)", icon="INFO")
+
+    if wm.cost_value_mode == 'SUM':
+        _draw_cost_value_sum(layout, context)
+    elif wm.cost_value_mode == 'FIXED':
+        _draw_cost_value_fixed(layout, context)
+    else:
+        _draw_rate_analysis(layout, context)
+
+
+def _draw_cost_value_sum(layout, context):
+    layout.label(text="This item sums its children's costs.", icon="INFO")
+    layout.separator(factor=0.3)
+    row = layout.row(align=True)
+    row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
+    row.operator("cost_value.apply_sum", text="Apply Sum", icon="EXPORT")
+
+
+def _draw_cost_value_fixed(layout, context):
+    wm = context.window_manager
+    item = _target_item(context)
+    ctrl = get_rate_controller(item) if item is not None else None
+
+    box = layout.box()
+    if ctrl is not None:
+        ident = ctrl.Identification or ctrl.Name or f"#{ctrl.id()}"
+        box.label(text=f"Cost value controlled by item {ident}", icon="ERROR")
+    col = box.column()
+    col.enabled = ctrl is None
+    col.prop(wm, "cost_value_fixed_amount")
+    row = col.row(align=True)
+    row.prop(wm, "cost_value_fixed_qty")
+    row.prop(wm, "cost_value_fixed_unit", text="Unit")
+    row.prop(wm, "cost_value_fixed_unit_enum", text="")
+
+    layout.separator(factor=0.3)
+    row = layout.row(align=True)
+    row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
+    row.operator("cost_value.apply_fixed", text="Apply Fixed Price", icon="EXPORT")
+
+
+def _draw_rate_analysis(layout, context):
+    wm = context.window_manager
+    item = _target_item(context)
+    ctrl = get_rate_controller(item) if item is not None else None
+    if ctrl is not None:
+        ident = ctrl.Identification or ctrl.Name or f"#{ctrl.id()}"
+        layout.label(text=f"Cost value controlled by item {ident}", icon="ERROR")
+
+    body = layout.column()
+    body.enabled = ctrl is None
+
+    row = body.row(align=True)
     row.operator("rate_analysis.add_component", text="", icon="ADD")
     row.operator("rate_analysis.add_from_rate", text="", icon="IMPORT")
     row.operator("rate_analysis.remove_component", text="", icon="REMOVE")
@@ -216,7 +277,7 @@ def _draw_rate_analysis(layout, context):
     row.separator()
     row.operator("rate_analysis.clear_all", text="", icon="TRASH")
 
-    layout.template_list(
+    body.template_list(
         "RATE_UL_analysis", "",
         wm, "rate_analysis_components",
         wm, "rate_analysis_active_index",
@@ -227,7 +288,7 @@ def _draw_rate_analysis(layout, context):
     idx = wm.rate_analysis_active_index
     if 0 <= idx < len(comps):
         comp = comps[idx]
-        box = layout.box()
+        box = body.box()
         split = box.split(factor=0.25)
         split.label(text="Category:")
         row = split.row(align=True)
@@ -249,7 +310,7 @@ def _draw_rate_analysis(layout, context):
             row.label(text=f"Rate ref: {ref_label}", icon="LINKED")
 
     ct, sg, profit, final = _get_totals(wm)
-    box = layout.box()
+    box = body.box()
 
     cat_totals = {}
     for c in wm.rate_analysis_components:
@@ -278,7 +339,7 @@ def _draw_rate_analysis(layout, context):
     split.prop(wm, "rate_analysis_rounding", text="Rounding")
     split.label(text="")
 
-    box2 = layout.box()
+    box2 = body.box()
     split = box2.split(factor=0.6)
     row_label = split.row(align=True)
     row_label.label(text="FINAL PRICE:", icon="DISC")

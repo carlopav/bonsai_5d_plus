@@ -19,6 +19,7 @@ from ...tool.cost import (
     get_rate_controller,
     unlink_from_rate,
     duplicate_and_relink_rate,
+    is_summary_cost_item,
 )
 from ..cost_sync.operator import schedule_propagate_popup
 
@@ -199,6 +200,49 @@ def _read_unit_basis(cv):
         return qty, unit_str
     except Exception:
         return None, None
+
+
+_UNITS_ENUM_TTL = 2.0
+_project_units_cache: tuple = (0.0, None)
+
+
+def _scan_project_units(file):
+    """Return sorted unit strings already used as a CostValue.UnitBasis in the project."""
+    seen = []
+    for cv in file.by_type("IfcCostValue"):
+        ub = getattr(cv, "UnitBasis", None)
+        if ub is None:
+            continue
+        try:
+            unit_str = ifc_unit_to_str(ub.UnitComponent)
+        except Exception:
+            continue
+        if unit_str and unit_str not in seen:
+            seen.append(unit_str)
+    return sorted(seen)
+
+
+def _get_project_unit_items(self, context):
+    """Dynamic EnumProperty items: units already used in the project's CostValues."""
+    global _project_units_cache
+    ts, result = _project_units_cache
+    if result is not None and _time.monotonic() - ts < _UNITS_ENUM_TTL:
+        return result
+    items = [('', "(free text)", "Type a custom unit in the field below")]
+    try:
+        from bonsai import tool
+        file = tool.Ifc.get()
+        if file:
+            items += [(u, u, "") for u in _scan_project_units(file)]
+    except Exception:
+        pass
+    _project_units_cache = (_time.monotonic(), items)
+    return items
+
+
+def _on_unit_enum_select(self, context):
+    if self.cost_value_fixed_unit_enum:
+        self.cost_value_fixed_unit = self.cost_value_fixed_unit_enum
 
 
 def _pct_label(label, pct):
@@ -390,71 +434,100 @@ def _load_cost_item(context, item_id=None):
     wm.rate_analysis_profit_pct = 0.0
     wm.rate_analysis_rounding = 0.0
     wm.rate_analysis_unit = ""
+    wm.cost_value_fixed_amount = 0.0
+    wm.cost_value_fixed_qty = 0.0
+    wm.cost_value_fixed_unit = ""
     wm.rate_analysis_target_ifc_id = cost_item.id()
     _read_cost_item_info(context)
 
     found = False
 
     cost_values = list(cost_item.CostValues or [])
-    # Nested structure: one summary CV with sub-components
-    if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
-        summary_cv = cost_values[0]
-        _, unit_str = _read_unit_basis(summary_cv)
-        wm.rate_analysis_unit = unit_str if unit_str and unit_str != "1" else ""
-        cost_values = list(summary_cv.Components or [])
 
-    for cv in cost_values:
-        cat = cv.Category or ""
+    if is_summary_cost_item(cost_item):
+        wm.cost_value_mode = 'SUM'
+        found = True
 
-        if cat in _LINE_CATEGORIES or cat not in _ALL_PA_CATEGORIES:
-            found = True
-            comp = wm.rate_analysis_components.add()
-            comp.category = _FROM_IFC.get(cat, 'NONE')
-            comp.description = cv.Name or ""
+    elif (
+        len(cost_values) == 1
+        and not (getattr(cost_values[0], "Components", None) or [])
+        and (cost_values[0].Category or "") not in _ALL_PA_CATEGORIES
+    ):
+        wm.cost_value_mode = 'FIXED'
+        found = True
+        cv = cost_values[0]
+        v = cv.AppliedValue
+        v = v.wrappedValue if hasattr(v, "wrappedValue") else v
+        wm.cost_value_fixed_amount = float(v) if v is not None else 0.0
+        qty, unit_str = _read_unit_basis(cv)
+        wm.cost_value_fixed_qty = qty if qty is not None else 0.0
+        wm.cost_value_fixed_unit = unit_str if unit_str and unit_str != "1" else ""
 
-            v = cv.AppliedValue
-            line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
+    elif cost_values:
+        wm.cost_value_mode = 'RATE_ANALYSIS'
 
-            qty, unit_str = _read_unit_basis(cv)
-            if qty is not None:
-                comp.qty = qty
-                comp.unit = unit_str or ""
-                comp.unit_price = round(line_total / qty, 6) if qty else line_total
-            else:
-                comp.unit_price = line_total
+        # Nested structure: one summary CV with sub-components
+        if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
+            summary_cv = cost_values[0]
+            _, unit_str = _read_unit_basis(summary_cv)
+            wm.rate_analysis_unit = unit_str if unit_str and unit_str != "1" else ""
+            cost_values = list(summary_cv.Components or [])
 
-            src_id = _parse_cv_source_id(cv)
-            if src_id is not None:
-                try:
-                    comp.source_ifc_id = src_id
-                    comp.source_identification = file.by_id(src_id).Identification or ""
-                except Exception:
-                    pass
+        for cv in cost_values:
+            cat = cv.Category or ""
 
-            if comp.source_ifc_id:
-                current = _get_rate_current_value(file, comp.source_ifc_id)
-                if current is not None and round(current, 2) != round(comp.unit_price, 2):
-                    comp.needs_rate_update = True
+            if cat in _LINE_CATEGORIES or cat not in _ALL_PA_CATEGORIES:
+                found = True
+                comp = wm.rate_analysis_components.add()
+                comp.category = _FROM_IFC.get(cat, 'NONE')
+                comp.description = cv.Name or ""
 
-        elif cat == _OVERHEAD_CAT:
-            found = True
-            pct = _parse_pct(cv.Name)
-            if pct is not None:
-                wm.rate_analysis_overhead_pct = pct
+                v = cv.AppliedValue
+                line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
 
-        elif cat == _PROFIT_CAT:
-            found = True
-            pct = _parse_pct(cv.Name)
-            if pct is not None:
-                wm.rate_analysis_profit_pct = pct
+                qty, unit_str = _read_unit_basis(cv)
+                if qty is not None:
+                    comp.qty = qty
+                    comp.unit = unit_str or ""
+                    comp.unit_price = round(line_total / qty, 6) if qty else line_total
+                else:
+                    comp.unit_price = line_total
 
-        elif cat == _ROUNDING_CAT:
-            found = True
-            v = cv.AppliedValue
-            if v is not None:
-                wm.rate_analysis_rounding = float(
-                    v.wrappedValue if hasattr(v, "wrappedValue") else v
-                )
+                src_id = _parse_cv_source_id(cv)
+                if src_id is not None:
+                    try:
+                        comp.source_ifc_id = src_id
+                        comp.source_identification = file.by_id(src_id).Identification or ""
+                    except Exception:
+                        pass
+
+                if comp.source_ifc_id:
+                    current = _get_rate_current_value(file, comp.source_ifc_id)
+                    if current is not None and round(current, 2) != round(comp.unit_price, 2):
+                        comp.needs_rate_update = True
+
+            elif cat == _OVERHEAD_CAT:
+                found = True
+                pct = _parse_pct(cv.Name)
+                if pct is not None:
+                    wm.rate_analysis_overhead_pct = pct
+
+            elif cat == _PROFIT_CAT:
+                found = True
+                pct = _parse_pct(cv.Name)
+                if pct is not None:
+                    wm.rate_analysis_profit_pct = pct
+
+            elif cat == _ROUNDING_CAT:
+                found = True
+                v = cv.AppliedValue
+                if v is not None:
+                    wm.rate_analysis_rounding = float(
+                        v.wrappedValue if hasattr(v, "wrappedValue") else v
+                    )
+
+    else:
+        wm.cost_value_mode = 'FIXED'
 
     _load_quantities(context, cost_item)
     return found
@@ -762,7 +835,17 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        wm = context.window_manager
+        if wm.rate_analysis_target_ifc_id == 0:
+            return False
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            if not file:
+                return False
+            return get_rate_controller(file.by_id(wm.rate_analysis_target_ifc_id)) is None
+        except Exception:
+            return False
 
     def _execute(self, context):
         from bonsai import tool
@@ -771,6 +854,9 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         wm = context.window_manager
         file = tool.Ifc.get()
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        if get_rate_controller(cost_item) is not None:
+            self.report({'WARNING'}, "Item is controlled by a rate — unlink first")
+            return
 
         _write_cost_item_info(tool, cost_item, wm)
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": "RATE_ANALYSIS"})
@@ -819,6 +905,84 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
 
         # The rewrite above replaced the cost-value entities; re-share them onto
         # any control-linked dependents and offer to propagate name/description.
+        resync_rate_values(tool, cost_item)
+        refresh_cost_ui(tool)
+        if get_rate_dependents(cost_item):
+            schedule_propagate_popup(cost_item.id())
+
+
+class CV_OT_ApplySum(*_IfcOperatorBase):
+    """Mark the active cost item as a Sum (Category='*') aggregator."""
+    bl_idname = "cost_value.apply_sum"
+    bl_label = "Apply Sum"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.window_manager.rate_analysis_target_ifc_id != 0
+
+    def _execute(self, context):
+        from bonsai import tool
+
+        wm = context.window_manager
+        file = tool.Ifc.get()
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+
+        _write_cost_item_info(tool, cost_item, wm)
+        tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
+        _remove_analysis_values(tool, cost_item)
+
+        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={"Category": "*"})
+
+        # Sum is exempt from the controlled-item restriction, but if this item
+        # itself controls others, re-share the new value onto them.
+        resync_rate_values(tool, cost_item)
+        refresh_cost_ui(tool)
+        if get_rate_dependents(cost_item):
+            schedule_propagate_popup(cost_item.id())
+
+
+class CV_OT_ApplyFixed(*_IfcOperatorBase):
+    """Write a single flat CostValue (no breakdown) to the active cost item."""
+    bl_idname = "cost_value.apply_fixed"
+    bl_label = "Apply Fixed Price"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        wm = context.window_manager
+        if wm.rate_analysis_target_ifc_id == 0:
+            return False
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            if not file:
+                return False
+            return get_rate_controller(file.by_id(wm.rate_analysis_target_ifc_id)) is None
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+
+        wm = context.window_manager
+        file = tool.Ifc.get()
+        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        if get_rate_controller(cost_item) is not None:
+            self.report({'WARNING'}, "Item is controlled by a rate — unlink first")
+            return
+
+        _write_cost_item_info(tool, cost_item, wm)
+        tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
+        _remove_analysis_values(tool, cost_item)
+
+        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
+            "AppliedValue": round(wm.cost_value_fixed_amount, 2),
+        })
+        set_unit_basis(file, cv, wm.cost_value_fixed_qty, wm.cost_value_fixed_unit)
+
         resync_rate_values(tool, cost_item)
         refresh_cost_ui(tool)
         if get_rate_dependents(cost_item):
@@ -1299,6 +1463,8 @@ classes = [
     RA_OT_SyncItemInfo,
     RA_OT_ApplyItemInfo,
     RA_OT_ApplyToIfc,
+    CV_OT_ApplySum,
+    CV_OT_ApplyFixed,
     RA_OT_AddCostItem,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,

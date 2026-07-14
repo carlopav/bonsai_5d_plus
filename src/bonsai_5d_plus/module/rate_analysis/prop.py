@@ -4,7 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
-from .operator import COMPONENT_CATEGORIES
+from .operator import COMPONENT_CATEGORIES, _get_project_unit_items, _on_unit_enum_select
 from ...tool.cost import QTY_TYPE_INFO
 
 _QTY_ENUM_ITEMS = [(k, v['label'], v['label']) for k, v in QTY_TYPE_INFO.items()]
@@ -105,6 +105,39 @@ def register():
         default=False,
         options={'SKIP_SAVE'},
     )
+    bpy.types.WindowManager.cost_value_mode = bpy.props.EnumProperty(
+        name="Cost Value Mode",
+        items=[
+            ('SUM', "Sum", "This item sums its children's costs (Category='*')"),
+            ('FIXED', "Fixed", "A single flat price, with no cost breakdown"),
+            ('RATE_ANALYSIS', "Rate Analysis", "Build the price from labor/material/equipment components"),
+        ],
+        default='FIXED',
+    )
+    bpy.types.WindowManager.cost_value_fixed_amount = bpy.props.FloatProperty(
+        name="Price",
+        description="Flat price for this cost item, with no breakdown",
+        precision=2,
+        default=0.0,
+    )
+    bpy.types.WindowManager.cost_value_fixed_qty = bpy.props.FloatProperty(
+        name="Qty",
+        description="Reference quantity the price above is for (optional)",
+        precision=3,
+        default=0.0,
+    )
+    bpy.types.WindowManager.cost_value_fixed_unit = bpy.props.StringProperty(
+        name="Unit of Measure",
+        description="Unit of measure for the reference quantity (e.g. mq, mc, m, cad)",
+        default="",
+    )
+    bpy.types.WindowManager.cost_value_fixed_unit_enum = bpy.props.EnumProperty(
+        name="Unit (project)",
+        description="Pick a unit already used in this project",
+        items=_get_project_unit_items,
+        update=_on_unit_enum_select,
+        options={'SKIP_SAVE'},
+    )
     bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
     bpy.types.WindowManager.cost_quantities_active_index = bpy.props.IntProperty(default=0)
     bpy.types.WindowManager.cost_quantities_type = bpy.props.EnumProperty(
@@ -127,6 +160,11 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_target_ifc_id
     del bpy.types.WindowManager.rate_analysis_editing_description
     del bpy.types.WindowManager.rate_analysis_auto_load
+    del bpy.types.WindowManager.cost_value_mode
+    del bpy.types.WindowManager.cost_value_fixed_amount
+    del bpy.types.WindowManager.cost_value_fixed_qty
+    del bpy.types.WindowManager.cost_value_fixed_unit
+    del bpy.types.WindowManager.cost_value_fixed_unit_enum
     del bpy.types.WindowManager.cost_quantities
     del bpy.types.WindowManager.cost_quantities_active_index
     del bpy.types.WindowManager.cost_quantities_type
