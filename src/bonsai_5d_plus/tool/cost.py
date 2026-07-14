@@ -313,6 +313,70 @@ def is_summary_cost_item(item):
     return any(getattr(cv, "Category", None) == "*" for cv in (item.CostValues or []))
 
 
+def iter_hierarchy_codes(schedule, start_level=0):
+    """Yield (cost_item, level, hierarchy_code) for every cost item in schedule.
+
+    Shared by the "Prints Manager" PDF export (cosmetic, read-only) and the
+    "Reorder Cost Schedule" sandbox tools (which write the code back to
+    Identification): a single place for the renumbering rule so both stay
+    in sync.
+
+    Levels above `start_level` (root = level 0) are left alone: each item's
+    existing Identification is used verbatim as its own code and as the
+    prefix for its descendants. From `start_level` down, each sibling group
+    is renumbered: an item whose Identification already ends in a number
+    keeps that number (bumped up only if needed to stay after a preceding
+    sibling); everything else is assigned the next number in sequence — so
+    existing numbering is preserved and continued rather than reset.
+    """
+    import ifcopenshell.util.cost as _cost_util
+
+    def walk(items, level, parent_prefix):
+        if level < start_level:
+            for item in items:
+                own = (item.Identification or "").strip()
+                yield item, level, own
+                children = get_cost_item_children(item)
+                if children:
+                    yield from walk(children, level + 1, own)
+        else:
+            running = 1
+            for item in items:
+                ident = (item.Identification or "").strip()
+                tail = ident.rsplit(".", 1)[-1] if ident else ""
+                n = int(tail) if tail.isdigit() else running
+                if n < running:
+                    n = running
+                own = str(n) if not parent_prefix else f"{parent_prefix}.{n}"
+                yield item, level, own
+                running = n + 1
+                children = get_cost_item_children(item)
+                if children:
+                    yield from walk(children, level + 1, own)
+
+    yield from walk(_cost_util.get_root_cost_items(schedule), 0, "")
+
+
+def hierarchy_code_map(schedule, start_level=0):
+    """dict of {cost_item.id(): hierarchy_code}, see iter_hierarchy_codes."""
+    return {item.id(): code for item, _level, code in iter_hierarchy_codes(schedule, start_level)}
+
+
+def max_hierarchy_level(schedule):
+    """Deepest level (root = 0) of cost items nested under schedule."""
+    import ifcopenshell.util.cost as _cost_util
+
+    def depth(items, level):
+        best = level
+        for item in items:
+            children = get_cost_item_children(item)
+            if children:
+                best = max(best, depth(children, level + 1))
+        return best
+
+    return depth(_cost_util.get_root_cost_items(schedule), 0)
+
+
 def remove_all_cost_values(tool, item):
     """Remove all direct CostValues from item using the Bonsai undo-safe API."""
     for cv in list(item.CostValues or []):

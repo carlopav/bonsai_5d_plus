@@ -3,16 +3,14 @@
 #
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
-import re
 import bpy
 
 from ...tool.cost import (
     refresh_cost_ui,
     get_cost_item_children,
-    is_summary_cost_item,
+    iter_hierarchy_codes,
+    max_hierarchy_level,
 )
-
-_NUMERIC_ID_RE = re.compile(r"^\d+(\.\d+)*$")
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -32,22 +30,16 @@ def _assign_identifications(tool, items, parent_prefix=""):
             _assign_identifications(tool, children, parent_prefix=ident)
 
 
-def _assign_identifications_skip_root_summary(tool, items, parent_prefix="", is_root=True):
-    """Like _assign_identifications but root-level summary items keep their
-    existing identification. The prefix used for their children is:
-    - the existing identification, if it is already numeric (e.g. "1", "2.3")
-    - otherwise the positional counter (i)."""
-    for i, item in enumerate(items, start=1):
-        ident = str(i) if not parent_prefix else f"{parent_prefix}.{i}"
-        if is_root and is_summary_cost_item(item):
-            existing = (item.Identification or "").strip()
-            child_prefix = existing if _NUMERIC_ID_RE.match(existing) else str(i)
-        else:
-            tool.Ifc.run("cost.edit_cost_item", cost_item=item, attributes={"Identification": ident})
-            child_prefix = ident
-        children = get_cost_item_children(item)
-        if children:
-            _assign_identifications_skip_root_summary(tool, children, parent_prefix=child_prefix, is_root=False)
+def _assign_identifications_from_level(tool, schedule, start_level):
+    """Renumber schedule using the shared iter_hierarchy_codes rule (also used
+    by the Prints Manager PDF export): levels above start_level keep their
+    existing Identification untouched; from start_level down, existing
+    numeric Identifications are kept and continued rather than reset."""
+    for item, level, code in iter_hierarchy_codes(schedule, start_level):
+        if level < start_level:
+            continue
+        if (item.Identification or "") != code:
+            tool.Ifc.run("cost.edit_cost_item", cost_item=item, attributes={"Identification": code})
 
 
 class _ReorderBase(*_IfcOperatorBase):
@@ -72,17 +64,20 @@ class _ReorderBase(*_IfcOperatorBase):
         col.separator(factor=0.5)
         col.label(text="Blender undo (Ctrl+Z) can revert within the current session.", icon="INFO")
 
-    def _do_reorder(self, tool, root_items):
+    def _active_schedule(self, context):
+        from bonsai import tool
+        file = tool.Ifc.get()
+        props = context.scene.BIMCostProperties
+        return file.by_id(int(props.active_cost_schedule_id))
+
+    def _do_reorder(self, tool, schedule):
         raise NotImplementedError
 
     def _execute(self, context):
         from bonsai import tool
-        import ifcopenshell.util.cost
 
-        file = tool.Ifc.get()
-        props = context.scene.BIMCostProperties
-        schedule = file.by_id(int(props.active_cost_schedule_id))
-        self._do_reorder(tool, ifcopenshell.util.cost.get_root_cost_items(schedule))
+        schedule = self._active_schedule(context)
+        self._do_reorder(tool, schedule)
         refresh_cost_ui(tool)
 
 
@@ -100,28 +95,48 @@ class RS_OT_ReorderIdentifications(_ReorderBase):
         col.label(text="   1,  1.1,  1.1.1,  1.2,  2,  2.1,  …")
         self._draw_footer(col)
 
-    def _do_reorder(self, tool, root_items):
-        _assign_identifications(tool, root_items)
+    def _do_reorder(self, tool, schedule):
+        import ifcopenshell.util.cost
+        _assign_identifications(tool, ifcopenshell.util.cost.get_root_cost_items(schedule))
 
 
 class RS_OT_ReorderKeepRootSummary(_ReorderBase):
-    """Assign progressive nested identifications but leave root-level summary
-    items (Category='*') unchanged. Their counter position is still used as
-    prefix for their children."""
+    """Assign progressive nested identifications from a chosen hierarchy
+    level down, leaving the levels above it untouched (same rule as the
+    Prints Manager PDF export's Hierarchy Renumbering: existing numeric
+    Identifications are kept and continued rather than reset)."""
     bl_idname = "reorder_schedule.reorder_keep_root_summary"
-    bl_label = "Reorder (keep root summaries)"
+    bl_label = "Reorder (keep levels above)"
+
+    start_level: bpy.props.IntProperty(
+        name="Renumber From Level",
+        description=(
+            "Cost hierarchy level (0 = root) from which items are renumbered. "
+            "Levels above it keep their existing Identification as-is; from "
+            "this level down, existing numeric Identifications are kept and "
+            "continued rather than reset. 0 renumbers the whole hierarchy"
+        ),
+        default=1, min=0,
+    )
 
     def draw(self, context):
         col = self.layout.column(align=True)
         self._draw_warning(col)
-        col.label(text="Identification fields will be overwritten with progressive numbers.")
-        col.label(text="Root-level summary items (Category='*') will be left unchanged.")
-        col.label(text="Their children will still be numbered using the parent's")
-        col.label(text="positional counter as prefix (e.g. 1.1, 1.2, 2.1, …).")
+        col.label(text="Identification fields from the chosen level down will be")
+        col.label(text="overwritten with progressive numbers; existing numeric")
+        col.label(text="Identifications are kept and continued where present.")
+        col.label(text="Levels above it are left unchanged.")
+        col.separator(factor=0.5)
+        col.prop(self, "start_level")
+        try:
+            schedule = self._active_schedule(context)
+            col.label(text=f"Deepest level in this schedule: {max_hierarchy_level(schedule)}")
+        except Exception:
+            pass
         self._draw_footer(col)
 
-    def _do_reorder(self, tool, root_items):
-        _assign_identifications_skip_root_summary(tool, root_items)
+    def _do_reorder(self, tool, schedule):
+        _assign_identifications_from_level(tool, schedule, self.start_level)
 
 
 classes = [RS_OT_ReorderIdentifications, RS_OT_ReorderKeepRootSummary]

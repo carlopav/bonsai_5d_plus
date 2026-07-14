@@ -11,6 +11,8 @@ import bpy
 
 from ...tool.cost import ifc_unit_to_str as _ifc_unit_to_str
 from ...tool.cost import PRICED_BOQ_TYPES
+from ...tool.cost import hierarchy_code_map as _compute_hierarchy_map
+from ...tool.cost import max_hierarchy_level as _max_hierarchy_level
 
 
 def _open_file(path):
@@ -77,10 +79,12 @@ def _source_rate_label(ifc, cost_item):
     return sor_name
 
 
-def _augment_csv(ifc, csv_text):
+def _augment_csv(ifc, csv_text, hierarchy_map=None):
     """Post-process the ifc5d CSV per cost item.
 
     - Add a "SourceRate" column (linked rate via IfcRelAssignsToControl).
+    - Optionally override the "Hierarchy" column with `hierarchy_map`
+      (see _compute_hierarchy_map).
     """
     import csv as _csv
     import io
@@ -108,6 +112,8 @@ def _augment_csv(ifc, csv_text):
             except Exception:
                 label = ""
         row["SourceRate"] = label
+        if hierarchy_map is not None and sid:
+            row["Hierarchy"] = hierarchy_map.get(int(sid), row.get("Hierarchy", ""))
         rows.append(row)
 
     out = io.StringIO()
@@ -185,6 +191,16 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Page",       default=True)
     should_print_cover:          bpy.props.BoolProperty(name="Show Cover Page",         default=False)
     should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
+    hierarchy_start_level:       bpy.props.IntProperty(
+        name="Renumber From Level",
+        description=(
+            "Cost hierarchy level (0 = root) from which items are renumbered. "
+            "Levels above it keep their existing Identification as-is; from "
+            "this level down, existing numeric Identifications are kept and "
+            "continued rather than reset. 0 renumbers the whole hierarchy"
+        ),
+        default=0, min=0,
+    )
     should_move_identification:  bpy.props.BoolProperty(
         name="Identification in Description column",
         description=(
@@ -230,6 +246,15 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_hierarchy")
         sub = col.column(align=True)
         sub.enabled = self.should_print_hierarchy
+        sub.prop(self, "hierarchy_start_level")
+        if self.should_print_hierarchy:
+            try:
+                ifc = _get_ifc()
+                schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+                max_level = _max_hierarchy_level(ifc.by_id(int(schedule_id)))
+                sub.label(text=f"Deepest level in this schedule: {max_level}")
+            except Exception:
+                pass
         sub.prop(self, "should_move_identification")
         layout.prop(self, "nested_structure_depth")
         layout.prop(self, "page_break_level")
@@ -299,8 +324,10 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
                 csv_text = f.read()
 
         # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
-        # "SourceRate" column the templates render under each item's Name.
-        csv_text = _augment_csv(ifc, csv_text)
+        # "SourceRate" column the templates render under each item's Name, and
+        # override ifc5d's plain positional "Hierarchy" column when requested.
+        hierarchy_map = _compute_hierarchy_map(schedule, self.hierarchy_start_level) if self.should_print_hierarchy else None
+        csv_text = _augment_csv(ifc, csv_text, hierarchy_map=hierarchy_map)
 
         common = dict(
             schedule_path="/schedule.csv",
@@ -357,6 +384,16 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
     should_print_description: bpy.props.BoolProperty(name="Show Descriptions",   default=False)
     should_print_cover:       bpy.props.BoolProperty(name="Show Cover Page",     default=False)
     should_print_hierarchy:   bpy.props.BoolProperty(name="Hierarchy Renumbering", default=False)
+    hierarchy_start_level:    bpy.props.IntProperty(
+        name="Renumber From Level",
+        description=(
+            "Cost hierarchy level (0 = root) from which items are renumbered. "
+            "Levels above it keep their existing Identification as-is; from "
+            "this level down, existing numeric Identifications are kept and "
+            "continued rather than reset. 0 renumbers the whole hierarchy"
+        ),
+        default=0, min=0,
+    )
     should_print_summary:     bpy.props.BoolProperty(name="Show Summary Page",   default=True)
     nested_structure_depth:   bpy.props.IntProperty( name="Max Depth (0 = all)", default=0, min=0)
 
@@ -376,6 +413,17 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_description")
         col.prop(self, "should_print_cover")
         col.prop(self, "should_print_hierarchy")
+        sub = col.column(align=True)
+        sub.enabled = self.should_print_hierarchy
+        sub.prop(self, "hierarchy_start_level")
+        if self.should_print_hierarchy:
+            try:
+                ifc = _get_ifc()
+                schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+                max_level = _max_hierarchy_level(ifc.by_id(int(schedule_id)))
+                sub.label(text=f"Deepest level in this schedule: {max_level}")
+            except Exception:
+                pass
         col.prop(self, "should_print_summary")
         layout.prop(self, "nested_structure_depth")
 
@@ -431,8 +479,10 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
                 csv_text = f.read()
 
         # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
-        # "SourceRate" column the template renders under each item's Name.
-        csv_text = _augment_csv(ifc, csv_text)
+        # "SourceRate" column the template renders under each item's Name, and
+        # override ifc5d's plain positional "Hierarchy" column when requested.
+        hierarchy_map = _compute_hierarchy_map(schedule, self.hierarchy_start_level) if self.should_print_hierarchy else None
+        csv_text = _augment_csv(ifc, csv_text, hierarchy_map=hierarchy_map)
 
         body = _tr.show_with(
             "labor_cost_breakdown.typ",
