@@ -7,9 +7,9 @@ import bpy
 from .operator import _get_ifc
 
 
-class SvgToPdfPanel(bpy.types.Panel):
+class PrintsManagerPanel(bpy.types.Panel):
     bl_label = "Prints Manager"
-    bl_idname = "SCENE_PT_svg_to_pdf"
+    bl_idname = "SCENE_PT_prints_manager"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
@@ -22,6 +22,7 @@ class SvgToPdfPanel(bpy.types.Panel):
             return
 
         layout.operator("bim.export_schedule_to_pdf",      icon="FILE_TEXT")
+        layout.operator("bim.export_schedule_to_ods",      icon="FILE_TEXT")
         layout.separator(factor=0.5)
         layout.operator("bim.export_labor_cost_breakdown_to_pdf", icon="COMMUNITY")
         layout.separator(factor=0.5)
@@ -30,4 +31,4 @@ class SvgToPdfPanel(bpy.types.Panel):
         row.operator("bim.export_all_rate_analysis_to_pdf", text="", icon="DOCUMENTS")
 
 
-classes = [SvgToPdfPanel]
+classes = [PrintsManagerPanel]

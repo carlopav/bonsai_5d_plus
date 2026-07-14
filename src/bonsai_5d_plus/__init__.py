@@ -38,7 +38,7 @@ from .module import (
     bulk_update,
     classification,
     tender,
-    svg_to_pdf,
+    prints_manager,
     import_export,
     reorder_schedule,
     cost_sync,
@@ -50,7 +50,7 @@ _MODULES = [
     rate_list,
     classification,
     tender,
-    svg_to_pdf,
+    prints_manager,
     import_export,
     boq_to_sor,   # Sandbox (must be last so panel appears at bottom of sidebar)
     bulk_update,

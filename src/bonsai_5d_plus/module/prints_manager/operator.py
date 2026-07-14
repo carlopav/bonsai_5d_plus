@@ -164,6 +164,99 @@ def _ensure_typst():
         return False
 
 
+def _ensure_odf():
+    try:
+        import odf  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    appdata = os.environ.get("APPDATA", "")
+    site = os.path.join(
+        appdata,
+        r"Blender Foundation\Blender\5.1\extensions\.local\lib\python3.13\site-packages",
+    )
+    if os.path.isdir(site) and site not in sys.path:
+        sys.path.insert(0, site)
+    try:
+        import odf  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+# ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
+# they route to the bill_of_quantities template with rates, keeping their own
+# type label. TENDER renders the same way (a bidder's priced BoQ) but is kept
+# out of PRICED_BOQ_TYPES so it is not treated as a valid source elsewhere
+# (BoQ->SoR conversion, tender generation).
+_HANDLED_TYPES = (*PRICED_BOQ_TYPES, "TENDER", "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
+
+
+def _extract_schedule_csv(context, should_print_hierarchy, hierarchy_start_level, force_schedule_type):
+    """Shared IFC -> CSV data extraction (ifc5d) for both the PDF and ODS exporters.
+
+    Returns a dict with ifc, ifc_path, schedule, doc_type, csv_text, project_name,
+    currency; or a dict with only "error" set when extraction fails.
+    """
+    import tempfile
+
+    if not _ensure_ifc5d():
+        return {"error": "ifc5d module not available (should be bundled with Bonsai)."}
+
+    from ifc5d.ifc5Dspreadsheet import Ifc5DCsvWriter
+
+    ifc = _get_ifc()
+    ifc_path = _get_ifc_path()
+    if not ifc or not ifc_path:
+        return {"error": "No IFC file loaded."}
+
+    schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+    schedule = ifc.by_id(int(schedule_id))
+
+    if force_schedule_type == "AUTO":
+        doc_type = schedule.PredefinedType
+        if doc_type not in _HANDLED_TYPES:
+            doc_type = "PRICEDBILLOFQUANTITIES"
+    else:
+        doc_type = force_schedule_type
+
+    project_name = ""
+    projects = ifc.by_type("IfcProject")
+    if projects:
+        project_name = projects[0].Name or ""
+    currency = ""
+    monetary = ifc.by_type("IfcMonetaryUnit")
+    if monetary:
+        currency = monetary[0].Currency or ""
+
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            Ifc5DCsvWriter(file=ifc, output=td, cost_schedule=schedule).write()
+        except Exception as e:
+            return {"error": f"Data extraction failed: {e}"}
+        csv_files = [f for f in os.listdir(td) if f.lower().endswith(".csv")]
+        if not csv_files:
+            return {"error": "ifc5d produced no CSV for this schedule."}
+        with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
+            csv_text = f.read()
+
+    # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
+    # "SourceRate" column, and override ifc5d's plain positional "Hierarchy"
+    # column when requested.
+    hierarchy_map = _compute_hierarchy_map(schedule, hierarchy_start_level) if should_print_hierarchy else None
+    csv_text = _augment_csv(ifc, csv_text, hierarchy_map=hierarchy_map)
+
+    return {
+        "ifc": ifc,
+        "ifc_path": ifc_path,
+        "schedule": schedule,
+        "doc_type": doc_type,
+        "csv_text": csv_text,
+        "project_name": project_name,
+        "currency": currency,
+    }
+
+
 class ExportScheduleToPdfOperator(bpy.types.Operator):
     """Export the active Cost Schedule to PDF using the ifc5d Typst template."""
     bl_idname = "bim.export_schedule_to_pdf"
@@ -259,75 +352,29 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         layout.prop(self, "nested_structure_depth")
         layout.prop(self, "page_break_level")
 
-    # ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
-    # they route to the bill_of_quantities template with rates, keeping their own
-    # type label. TENDER renders the same way (a bidder's priced BoQ) but is kept
-    # out of PRICED_BOQ_TYPES so it is not treated as a valid source elsewhere
-    # (BoQ->SoR conversion, tender generation).
-    _HANDLED_TYPES = (*PRICED_BOQ_TYPES, "TENDER", "UNPRICEDBILLOFQUANTITIES", "SCHEDULEOFRATES")
-
     def execute(self, context):
-        import tempfile
-
         if not _ensure_typst():
             self.report({"ERROR"}, "typst Python package not found. Install it in Blender's Python: pip install typst")
-            return {"CANCELLED"}
-        if not _ensure_ifc5d():
-            self.report({"ERROR"}, "ifc5d module not available (should be bundled with Bonsai).")
             return {"CANCELLED"}
 
         # ifc5d only provides the data extraction (IFC → CSV); all presentation
         # (the Typst templates) lives in this addon under typst/.
-        from ifc5d.ifc5Dspreadsheet import Ifc5DCsvWriter
         from . import typst_render as _tr
 
-        ifc = _get_ifc()
-        ifc_path = _get_ifc_path()
-        if not ifc or not ifc_path:
-            self.report({"ERROR"}, "No IFC file loaded.")
+        data = _extract_schedule_csv(context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type)
+        if "error" in data:
+            self.report({"ERROR"}, data["error"])
             return {"CANCELLED"}
 
-        schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
-        schedule = ifc.by_id(int(schedule_id))
+        ifc_path = data["ifc_path"]
+        schedule = data["schedule"]
+        doc_type = data["doc_type"]
+        csv_text = data["csv_text"]
+        project_name = data["project_name"]
+        currency = data["currency"]
+
         safe_name = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
         pdf_path = os.path.join(os.path.dirname(os.path.abspath(ifc_path)), f"{safe_name}.pdf")
-
-        # Resolve the effective document type.
-        if self.force_schedule_type == "AUTO":
-            doc_type = schedule.PredefinedType
-            if doc_type not in self._HANDLED_TYPES:
-                doc_type = "PRICEDBILLOFQUANTITIES"
-        else:
-            doc_type = self.force_schedule_type
-
-        project_name = ""
-        projects = ifc.by_type("IfcProject")
-        if projects:
-            project_name = projects[0].Name or ""
-        currency = ""
-        monetary = ifc.by_type("IfcMonetaryUnit")
-        if monetary:
-            currency = monetary[0].Currency or ""
-
-        # Extract the CSV via ifc5d into a temp dir, then read it back.
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                Ifc5DCsvWriter(file=ifc, output=td, cost_schedule=schedule).write()
-            except Exception as e:
-                self.report({"ERROR"}, f"Data extraction failed: {e}")
-                return {"CANCELLED"}
-            csv_files = [f for f in os.listdir(td) if f.lower().endswith(".csv")]
-            if not csv_files:
-                self.report({"ERROR"}, "ifc5d produced no CSV for this schedule.")
-                return {"CANCELLED"}
-            with open(os.path.join(td, csv_files[0]), encoding="utf-8") as f:
-                csv_text = f.read()
-
-        # Inject the linked Schedule-of-Rates item (IfcRelAssignsToControl) as a
-        # "SourceRate" column the templates render under each item's Name, and
-        # override ifc5d's plain positional "Hierarchy" column when requested.
-        hierarchy_map = _compute_hierarchy_map(schedule, self.hierarchy_start_level) if self.should_print_hierarchy else None
-        csv_text = _augment_csv(ifc, csv_text, hierarchy_map=hierarchy_map)
 
         common = dict(
             schedule_path="/schedule.csv",
@@ -372,6 +419,143 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
 
         self.report({"INFO"}, f"Saved: {pdf_path}")
         _open_file(pdf_path)
+        return {"FINISHED"}
+
+
+class ExportScheduleToOdsOperator(bpy.types.Operator):
+    """Export the active Cost Schedule to ODS with live spreadsheet formulas."""
+    bl_idname = "bim.export_schedule_to_ods"
+    bl_label = "Export Schedule to ODS"
+    bl_options = {"REGISTER"}
+
+    force_schedule_type: bpy.props.EnumProperty(
+        name="Document Type",
+        items=[
+            ("AUTO",                    "Auto (from schedule type)",  ""),
+            ("PRICEDBILLOFQUANTITIES",  "Priced Bill of Quantities",  ""),
+            ("UNPRICEDBILLOFQUANTITIES","Unpriced Bill of Quantities",""),
+            ("ESTIMATE",                "Estimate",                   ""),
+            ("COSTPLAN",                "Cost Plan",                  ""),
+            ("BUDGET",                  "Budget",                     ""),
+            ("TENDER",                  "Tender",                     ""),
+            ("SCHEDULEOFRATES",         "Schedule of Rates",          ""),
+        ],
+        default="AUTO",
+    )
+    should_print_rates:          bpy.props.BoolProperty(name="Show Rates",              default=True)
+    should_print_description:    bpy.props.BoolProperty(name="Show Descriptions",       default=False)
+    should_print_each_quantity:  bpy.props.BoolProperty(name="Show Quantity Breakdown", default=True)
+    should_print_qty_decomposition: bpy.props.BoolProperty(name="Show Quantity Decomposition", default=False)
+    should_print_summary:        bpy.props.BoolProperty(name="Show Summary Sheet",      default=True)
+    should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
+    hierarchy_start_level:       bpy.props.IntProperty(
+        name="Renumber From Level",
+        description=(
+            "Cost hierarchy level (0 = root) from which items are renumbered. "
+            "Levels above it keep their existing Identification as-is; from "
+            "this level down, existing numeric Identifications are kept and "
+            "continued rather than reset. 0 renumbers the whole hierarchy"
+        ),
+        default=0, min=0,
+    )
+    should_move_identification:  bpy.props.BoolProperty(
+        name="Identification in Description column",
+        description=(
+            "For self-contained BoQs where the Identification holds the price-list code: "
+            "show each cost item's Identification above its Name in the Description column, "
+            "leaving the generated hierarchy code alone in the first column. "
+            "Requires Hierarchy Renumbering"
+        ),
+        default=False,
+    )
+    nested_structure_depth:      bpy.props.IntProperty( name="Max Depth (0 = all)",     default=0, min=0)
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
+        except Exception:
+            return False
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "force_schedule_type")
+        layout.separator(factor=0.5)
+        col = layout.column(align=True)
+        col.prop(self, "should_print_rates")
+        col.prop(self, "should_print_description")
+        col.prop(self, "should_print_each_quantity")
+        col.prop(self, "should_print_qty_decomposition")
+        col.prop(self, "should_print_summary")
+        col.prop(self, "should_print_hierarchy")
+        sub = col.column(align=True)
+        sub.enabled = self.should_print_hierarchy
+        sub.prop(self, "hierarchy_start_level")
+        if self.should_print_hierarchy:
+            try:
+                ifc = _get_ifc()
+                schedule_id = context.scene.BIMCostProperties.active_cost_schedule_id
+                max_level = _max_hierarchy_level(ifc.by_id(int(schedule_id)))
+                sub.label(text=f"Deepest level in this schedule: {max_level}")
+            except Exception:
+                pass
+        sub.prop(self, "should_move_identification")
+        layout.prop(self, "nested_structure_depth")
+
+    def execute(self, context):
+        if not _ensure_odf():
+            self.report({"ERROR"}, "odfpy Python package not found. Install it in Blender's Python: pip install odfpy")
+            return {"CANCELLED"}
+
+        # ifc5d only provides the data extraction (IFC → CSV); all presentation
+        # lives in this addon, in ods_render.py.
+        from . import ods_render as _or
+
+        data = _extract_schedule_csv(context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type)
+        if "error" in data:
+            self.report({"ERROR"}, data["error"])
+            return {"CANCELLED"}
+
+        ifc_path = data["ifc_path"]
+        schedule = data["schedule"]
+        doc_type = data["doc_type"]
+        csv_text = data["csv_text"]
+        project_name = data["project_name"]
+        currency = data["currency"]
+
+        safe_name = (schedule.Name or "schedule").replace("/", "_").replace("\\", "_")
+        ods_path = os.path.join(os.path.dirname(os.path.abspath(ifc_path)), f"{safe_name}.ods")
+
+        # Moving the Identification into the Description column only makes sense
+        # together with the generated hierarchy code; gate it on that here too.
+        move_identification = self.should_move_identification and self.should_print_hierarchy
+
+        options = dict(
+            doc_type=doc_type,
+            should_print_rates=self.should_print_rates,
+            should_print_description=self.should_print_description,
+            should_print_each_quantity=self.should_print_each_quantity,
+            should_print_qty_decomposition=self.should_print_qty_decomposition,
+            should_print_summary=self.should_print_summary,
+            should_print_hierarchy=self.should_print_hierarchy,
+            should_move_identification=move_identification,
+            title=project_name,
+            schedule_name=schedule.Name or "",
+            schedule_description=schedule.Description or "",
+            currency=currency,
+        )
+
+        try:
+            _or.compile_document(csv_text, options, ods_path)
+        except Exception as e:
+            self.report({"ERROR"}, f"ODS generation failed: {e}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Saved: {ods_path}")
+        _open_file(ods_path)
         return {"FINISHED"}
 
 
@@ -866,4 +1050,4 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = [ExportScheduleToPdfOperator, ExportLaborCostBreakdownToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]
+classes = [ExportScheduleToPdfOperator, ExportScheduleToOdsOperator, ExportLaborCostBreakdownToPdfOperator, ExportRateAnalysisToPdfOperator, ExportAllRateAnalysisToPdfOperator]

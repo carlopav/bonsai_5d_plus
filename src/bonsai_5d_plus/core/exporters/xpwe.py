@@ -39,6 +39,8 @@ will be implemented once the populated PweEPAR schema is confirmed from a sample
 
 import xml.etree.ElementTree as ET
 
+from ..formula import split_formula as _split_formula
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -168,66 +170,6 @@ def _quantities(item):
             "formula": getattr(q, "Formula", None) or "",
         })
     return rows
-
-
-def _safe_eval(expr):
-    """Evaluate a simple arithmetic expression (digits and + - * / . ( ) only).
-
-    Returns a float, or None when the text isn't a safe numeric expression. '×'
-    and ',' are normalised to '*' and '.' first.
-    """
-    import re
-    e = (expr or "").replace("×", "*").replace(",", ".").strip()
-    if not e or re.fullmatch(r"[\d\s+\-*/().]+", e) is None:
-        return None
-    try:
-        return float(eval(e))  # safe: only the numeric charset above is allowed
-    except Exception:
-        return None
-
-
-def _split_formula(formula, value):
-    """Map an IFC quantity Formula onto XPWE's 4 RGItem factors.
-
-    Returns (PartiUguali, Lunghezza, Larghezza, HPeso, faithful). The standard
-    case is the importer's "n × l × w × h" product of 1–4 factors: each goes in a
-    column ('1'/empty → "", an expression keeps its text without the importer's
-    protective parentheses) and ``faithful`` is True.
-
-    For anything that can't be represented as ≤4 factors whose product equals the
-    quantity value — more than four factors, a non-arithmetic formula, or a
-    product that doesn't reconcile — we put the authoritative numeric value in
-    PartiUguali (the row total is then always exact) and return faithful=False so
-    the caller can keep the original formula visible in the row description.
-    """
-    f = (formula or "").strip()
-    if f:
-        parts = [p.strip() for p in f.split("×")]
-        if 1 <= len(parts) <= 4:
-            cells = []
-            for p in parts:
-                if p in ("", "1"):
-                    cells.append("")
-                else:
-                    if p.startswith("(") and p.endswith(")"):
-                        p = p[1:-1].strip()
-                    cells.append(p)
-            cells += [""] * (4 - len(cells))
-            if any(cells):
-                product = 1.0
-                ok = True
-                for c in cells:
-                    if c == "":
-                        continue
-                    v = _safe_eval(c)
-                    if v is None:
-                        ok = False
-                        break
-                    product *= v
-                tol = max(1e-4, abs(float(value)) * 1e-6)
-                if ok and abs(product - float(value)) <= tol:
-                    return (cells[0], cells[1], cells[2], cells[3], True)
-    return (_num(value), "", "", "", False)
 
 
 # ---------------------------------------------------------------------------
