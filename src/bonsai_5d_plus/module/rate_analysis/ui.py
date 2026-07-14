@@ -295,10 +295,10 @@ class MEAS_UL_rows(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         row = layout.row(align=True)
 
-        # Selection zone: clicking here selects the row without triggering text edit
         col = row.column()
-        col.scale_x = 0.12
-        col.label(text="")
+        col.scale_x = 0.9
+        sel_icon = 'CHECKBOX_HLT' if item.is_selected else 'CHECKBOX_DEHLT'
+        col.prop(item, "is_selected", text="", icon=sel_icon, emboss=False)
 
         col = row.column()
         col.scale_x = 2.0
@@ -306,16 +306,13 @@ class MEAS_UL_rows(bpy.types.UIList):
 
         for field in ("qty_nr", "qty_l", "qty_b", "qty_h"):
             col = row.column()
-            col.scale_x = 0.6
-            col.prop(item, field, text="")
+            col.scale_x = 1.4
+            col.prop(item, field, text="", emboss=False)
 
         partial = _compute_partial_qty(item.qty_nr, item.qty_l, item.qty_b, item.qty_h)
         col = row.column()
-        col.scale_x = 0.7
-        col.label(text=f"{partial:g}")
-
-        op = row.operator("cost_quantities.insert_row_after", text="", icon="ADD", emboss=False)
-        op.index = index
+        col.scale_x = 1.4
+        col.label(text=f"{partial:.2f}")
 
 
 def _draw_quantities(layout, context):
@@ -330,16 +327,21 @@ def _draw_quantities(layout, context):
     row.operator("cost_quantities.move_row_down", text="", icon="TRIA_DOWN")
     row.separator()
     row.operator("rate_analysis.add_zero_quantity", text="", icon="RADIOBUT_OFF")
+    row.separator()
+    row.operator("cost_quantities.select_all",  text="", icon="CHECKBOX_HLT")
+    row.operator("cost_quantities.select_none", text="", icon="CHECKBOX_DEHLT")
+    row.separator()
+    row.operator("cost_quantities.copy_rows",  text="", icon="COPYDOWN")
+    row.operator("cost_quantities.paste_rows", text="", icon="PASTEDOWN")
 
     # Column headers — mirrors UIList column proportions
     hdr = layout.row(align=True)
     hdr.scale_y = 0.6
-    col = hdr.column(); col.scale_x = 0.12; col.label(text="")
+    col = hdr.column(); col.scale_x = 0.9; col.label(text="")
     col = hdr.column(); col.scale_x = 2.0;  col.label(text="Descrizione")
     for lbl in ("NR", "L", "B", "H"):
-        col = hdr.column(); col.scale_x = 0.6; col.label(text=lbl)
-    col = hdr.column(); col.scale_x = 0.7;  col.label(text="Parziale")
-    col = hdr.column(); col.scale_x = 0.25; col.label(text="")
+        col = hdr.column(); col.scale_x = 1.4; col.label(text=lbl)
+    col = hdr.column(); col.scale_x = 1.4;  col.label(text="Parziale")
 
     layout.template_list(
         "MEAS_UL_rows", "",
@@ -349,18 +351,18 @@ def _draw_quantities(layout, context):
     )
 
     # Total row — "Totale:" centred, value aligned with "Parziale" column
-    # Split factor ≈ (spacer+desc+4cols) / total_scale_units: 0.12+2.0+2.4 / 5.47 ≈ 0.83
+    # Split factor ≈ (spacer+desc+4cols) / total_scale_units: 0.9+2.0+5.6 / 9.9 ≈ 0.86
     total = sum(
         _compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h)
         for r in wm.cost_quantities
     )
     unit = _QTY_UNIT_ABBR.get(wm.cost_quantities_type, "")
-    total_row = layout.split(factor=0.83)
+    total_row = layout.split(factor=0.86)
     lbl_col = total_row.row()
     lbl_col.alignment = 'CENTER'
     lbl_col.label(text="Totale:", icon="PROPERTIES")
     val_col = total_row.row()
-    val_col.label(text=f"{total:g} {unit}".strip())
+    val_col.label(text=f"{total:.2f} {unit}".strip())
 
     layout.separator(factor=0.3)
     row = layout.row(align=True)

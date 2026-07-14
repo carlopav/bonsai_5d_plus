@@ -297,6 +297,40 @@ def _parse_formula_qty(formula_str):
     return vals[0], vals[1], vals[2], vals[3]
 
 
+_QTY_CLIPBOARD_MARKER = "BONSAI5D_MEASURE_ROWS_V3"
+
+
+def _serialize_measure_rows(rows):
+    """Encode measurement rows (description + NR/L/B/H) as tab-separated text
+    for the system clipboard, so rows can be pasted into another cost item,
+    schedule, or IFC file."""
+    lines = [_QTY_CLIPBOARD_MARKER]
+    for r in rows:
+        desc = (r.qty_desc or "").replace("\t", " ").replace("\n", " ")
+        lines.append("\t".join((desc, repr(r.qty_nr), repr(r.qty_l), repr(r.qty_b), repr(r.qty_h))))
+    return "\n".join(lines)
+
+
+def _deserialize_measure_rows(text):
+    """Parse clipboard text written by _serialize_measure_rows(); None if not ours."""
+    lines = (text or "").splitlines()
+    if not lines or lines[0].strip() != _QTY_CLIPBOARD_MARKER:
+        return None
+    rows = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        try:
+            nr, l, b, h = (float(p) for p in parts[1:])
+        except ValueError:
+            continue
+        rows.append((parts[0], nr, l, b, h))
+    return rows
+
+
 def _load_quantities(context, cost_item=None):
     """Populate cost_quantities collection from cost_item.CostQuantities."""
     wm = context.window_manager
@@ -1103,22 +1137,90 @@ class QTY_OT_MoveRowDown(_WMListMoveDown):
     _index_attr      = "cost_quantities_active_index"
 
 
-class QTY_OT_InsertRowAfter(bpy.types.Operator):
-    bl_idname = "cost_quantities.insert_row_after"
-    bl_label = "Insert Row Below"
+class QTY_OT_SelectAll(bpy.types.Operator):
+    bl_idname = "cost_quantities.select_all"
+    bl_label = "Select All Rows"
     bl_options = {'REGISTER', 'UNDO'}
 
-    index: bpy.props.IntProperty(options={'SKIP_SAVE'})
+    @classmethod
+    def poll(cls, context):
+        return len(context.window_manager.cost_quantities) > 0
+
+    def execute(self, context):
+        for row in context.window_manager.cost_quantities:
+            row.is_selected = True
+        return {'FINISHED'}
+
+
+class QTY_OT_SelectNone(bpy.types.Operator):
+    bl_idname = "cost_quantities.select_none"
+    bl_label = "Deselect All Rows"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.window_manager.cost_quantities) > 0
+
+    def execute(self, context):
+        for row in context.window_manager.cost_quantities:
+            row.is_selected = False
+        return {'FINISHED'}
+
+
+class QTY_OT_CopyRows(bpy.types.Operator):
+    """Copy selected measurement rows to the system clipboard (survives across
+    cost items, schedules, and IFC files — paste with Paste Rows)."""
+    bl_idname = "cost_quantities.copy_rows"
+    bl_label = "Copy Rows"
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.window_manager.cost_quantities) > 0
 
     def execute(self, context):
         wm = context.window_manager
+        rows = [r for r in wm.cost_quantities if r.is_selected]
+        if not rows:
+            idx = wm.cost_quantities_active_index
+            if 0 <= idx < len(wm.cost_quantities):
+                rows = [wm.cost_quantities[idx]]
+        if not rows:
+            self.report({'WARNING'}, "No rows to copy")
+            return {'CANCELLED'}
+        context.window_manager.clipboard = _serialize_measure_rows(rows)
+        self.report({'INFO'}, f"Copied {len(rows)} row(s)")
+        return {'FINISHED'}
+
+
+class QTY_OT_PasteRows(bpy.types.Operator):
+    """Paste measurement rows previously copied with Copy Rows, inserting
+    them after the active row."""
+    bl_idname = "cost_quantities.paste_rows"
+    bl_label = "Paste Rows"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        parsed = _deserialize_measure_rows(wm.clipboard)
+        if not parsed:
+            self.report({'ERROR'}, "Clipboard does not contain copied quantity rows")
+            return {'CANCELLED'}
+
         items = wm.cost_quantities
-        items.add().qty_nr = 1.0
-        new_idx = len(items) - 1
-        target = self.index + 1
-        if target < new_idx:
-            items.move(new_idx, target)
-        wm.cost_quantities_active_index = target
+        insert_at = wm.cost_quantities_active_index + 1 if len(items) else 0
+        insert_at = max(0, min(insert_at, len(items)))
+
+        for offset, (desc, nr, l, b, h) in enumerate(parsed):
+            row = items.add()
+            row.qty_desc, row.qty_nr, row.qty_l, row.qty_b, row.qty_h = desc, nr, l, b, h
+            row.is_selected = False
+            new_idx = len(items) - 1
+            target = insert_at + offset
+            if target < new_idx:
+                items.move(new_idx, target)
+
+        wm.cost_quantities_active_index = insert_at + len(parsed) - 1
+        self.report({'INFO'}, f"Pasted {len(parsed)} row(s)")
         return {'FINISHED'}
 
 
@@ -1209,7 +1311,10 @@ classes = [
     QTY_OT_RemoveRow,
     QTY_OT_MoveRowUp,
     QTY_OT_MoveRowDown,
-    QTY_OT_InsertRowAfter,
+    QTY_OT_SelectAll,
+    QTY_OT_SelectNone,
+    QTY_OT_CopyRows,
+    QTY_OT_PasteRows,
     QTY_OT_Load,
     QTY_OT_Apply,
 ]
