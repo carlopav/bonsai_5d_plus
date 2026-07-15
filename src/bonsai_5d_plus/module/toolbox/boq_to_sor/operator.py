@@ -10,7 +10,7 @@ from .data import (
     _collect_leaf_items, _build_unique_items, _collect_sor_items,
     _compare_cost_items, _format_diffs, _copy_cost_values, _replace_cost_values,
 )
-from ...tool.cost import refresh_cost_ui
+from ....tool.cost import refresh_cost_ui
 
 try:
     from bonsai import tool as _bonsai_tool

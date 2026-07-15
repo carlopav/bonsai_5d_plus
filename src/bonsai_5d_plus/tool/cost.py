@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Bonsai5D+.  If not, see <http://www.gnu.org/licenses/>.
 
-"""Shared IFC cost helpers — used by module/rate_list and module/import_export."""
+"""Shared IFC cost helpers — used by module/rate_list_importer and module/import_export."""
 
 import json
 
@@ -317,7 +317,7 @@ def iter_hierarchy_codes(schedule, start_level=0):
     """Yield (cost_item, level, hierarchy_code) for every cost item in schedule.
 
     Shared by the "Prints Manager" PDF export (cosmetic, read-only) and the
-    "Reorder Cost Schedule" sandbox tools (which write the code back to
+    "Reorder Cost Schedule" toolbox tools (which write the code back to
     Identification): a single place for the renumbering rule so both stay
     in sync.
 

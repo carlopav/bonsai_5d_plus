@@ -419,7 +419,7 @@ def build_bill_of_quantities(doc, rows, options):
                 desc_lines.append((source_rate, False, True, 8))
             if show_desc and row.get("Description"):
                 desc_lines.append((row.get("Description"), False, False, 8))
-            indent_style = styles.cell_style(padding_left_mm=depth * INDENT_MM, wrap=True)
+            indent_style = styles.cell_style(padding_left_mm=(depth - 1) * INDENT_MM, wrap=True)
             sheet.text_cell(r, desc_lines, styles, cell_style_name=indent_style)
             if show_decomp:
                 for _ in range(4):
@@ -458,7 +458,7 @@ def build_bill_of_quantities(doc, rows, options):
                 formula_text = q[2] if len(q) > 2 else ""
                 sr = sheet.new_row()
                 sheet.empty_cell(sr)
-                sub_indent = styles.cell_style(padding_left_mm=(depth + 1) * INDENT_MM, wrap=True)
+                sub_indent = styles.cell_style(padding_left_mm=depth * INDENT_MM, wrap=True)
                 sheet.text_cell(sr, [(qname, False, True, 8)], styles, cell_style_name=sub_indent)
                 if show_decomp:
                     factor_cells = split_formula(formula_text, qvalue)[:4]

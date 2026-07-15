@@ -3,7 +3,7 @@
 #
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
-from ...tool.cost import PRICED_BOQ_TYPES
+from ....tool.cost import PRICED_BOQ_TYPES
 
 VALID_TYPES = {"UNPRICEDBILLOFQUANTITIES", *PRICED_BOQ_TYPES}
 MAX_DISPLAY = 10

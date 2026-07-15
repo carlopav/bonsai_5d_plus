@@ -9,6 +9,7 @@ from .operator import (
     COMPONENT_CATEGORIES,
     _get_totals,
     _get_cost_schedule,
+    _get_rate_value_and_unit,
     _DESCRIPTION_TEXT_NAME,
     _QTY_UNIT_ABBR,
     _compute_partial_qty,
@@ -20,6 +21,8 @@ from ...tool.cost import (
     rate_dependent_diffs,
     is_item_in_sync,
     get_cost_item_schedule,
+    is_summary_cost_item,
+    get_cost_item_children,
 )
 
 
@@ -37,14 +40,11 @@ def _target_item(context):
 
 
 def _draw_rate_link_header(layout, context):
-    """One-line rate-link status for the active cost item (header).
-
-    Returns the row used for the 'Rate: ...' line (controller case), so the
-    caller can append more controls to it — None otherwise.
-    """
+    """One-line rate-link status for the active cost item (header), with the
+    relevant link/sync operators attached."""
     item = _target_item(context)
     if item is None:
-        return None
+        return
     ctrl = get_rate_controller(item)
     if ctrl is not None:
         synced = is_item_in_sync(item)
@@ -54,16 +54,27 @@ def _draw_rate_link_header(layout, context):
         label = f"Rate: {sor_name}" + (f"  [{ident}]" if ident else "")
         row = layout.row(align=True)
         row.label(text=label, icon="CHECKMARK" if synced else "ERROR")
-        return row
+        row.operator("rate_analysis.load_controller", text="", icon="DRIVER")
+        if not synced:
+            op = row.operator("bonsai5d.resync_from_rate", text="", icon="FILE_REFRESH")
+            op.item_id = item.id()
+        row.operator("rate_analysis.unlink_from_rate", text="", icon="UNLINKED")
+        row.operator("rate_analysis.make_unique", text="", icon="DUPLICATE")
+        row.operator("rate_analysis.duplicate_rate", text="", icon="COPYDOWN")
+        return
     deps = get_rate_dependents(item)
     if deps:
         groups = group_dependents_by_schedule(item)
         in_sync = not rate_dependent_diffs(item)
-        layout.label(
+        row = layout.row(align=True)
+        row.label(
             text=f"Controls {len(deps)} item(s) in {len(groups)} schedule(s)",
             icon="CHECKMARK" if in_sync else "ERROR",
         )
-    return None
+        op = row.operator("bonsai5d.propagate_rate", text="", icon="EXPORT")
+        op.rate_id = item.id()
+        op = row.operator("bonsai5d.resync_rate_values", text="", icon="FILE_REFRESH")
+        op.rate_id = item.id()
 
 
 class RATE_UL_analysis(bpy.types.UIList):
@@ -90,6 +101,17 @@ class RATE_UL_analysis(bpy.types.UIList):
             op.component_index = index
 
 
+class FIXED_UL_values(bpy.types.UIList):
+    """Editable list of flat cost values: category, name, value — all inline."""
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row(align=True)
+        row.prop(item, "category", text="", emboss=False)
+        name_col = row.column()
+        name_col.scale_x = 2.0
+        name_col.prop(item, "description", text="", emboss=False)
+        row.prop(item, "unit_price", text="", emboss=False)
+
+
 class CostItemEditorPanel(bpy.types.Panel):
     bl_label = "Cost Item Editor"
     bl_idname = "SCENE_PT_cost_item_editor"
@@ -103,7 +125,7 @@ class CostItemEditorPanel(bpy.types.Panel):
         box = layout.box()
 
         row = box.row(align=True)
-        row.label(text="Summary Cost Item:")
+        row.label(text="Add Summary Cost Item:")
         sub = row.row(align=True)
         op = sub.operator("rate_analysis.add_cost_item", text="", icon="TRIA_UP")
         op.position, op.summary = 'BEFORE', True
@@ -113,7 +135,7 @@ class CostItemEditorPanel(bpy.types.Panel):
         op.position, op.summary = 'CHILD', True
 
         row.separator()
-        row.label(text="Cost Item:")
+        row.label(text="Add Cost Item:")
         sub = row.row(align=True)
         op = sub.operator("rate_analysis.add_cost_item", text="", icon="TRIA_UP")
         op.position, op.summary = 'BEFORE', False
@@ -147,12 +169,7 @@ class CostItemEditorPanel(bpy.types.Panel):
             except Exception as e:
                 sched_label = f"Cost Schedule: (error: {e})"
             layout.label(text=sched_label, icon="SPREADSHEET")
-            rate_row = _draw_rate_link_header(layout, context)
-            if rate_row is not None:
-                rate_row.operator("rate_analysis.load_controller", text="", icon="DRIVER")
-                rate_row.operator("rate_analysis.unlink_from_rate", text="", icon="UNLINKED")
-                rate_row.operator("rate_analysis.make_unique", text="", icon="DUPLICATE")
-                rate_row.operator("rate_analysis.duplicate_rate", text="", icon="COPYDOWN")
+            _draw_rate_link_header(layout, context)
 
         box2 = layout.box()
 
@@ -162,7 +179,7 @@ class CostItemEditorPanel(bpy.types.Panel):
             _draw_identification(panel, context)
 
         header, panel = box2.panel("cie_rate_analysis", default_closed=True)
-        header.label(text="Cost Value")
+        header.label(text="Cost Values")
         if panel:
             _draw_cost_value(panel, context)
 
@@ -170,11 +187,6 @@ class CostItemEditorPanel(bpy.types.Panel):
         header.label(text="Cost Quantities")
         if panel:
             _draw_quantities(panel, context)
-
-        header, panel = box2.panel("cie_rate_sync", default_closed=True)
-        header.label(text="Rate Sync")
-        if panel:
-            _draw_rate_sync(panel, context)
 
 
 def _draw_identification(layout, context):
@@ -207,13 +219,44 @@ def _draw_identification(layout, context):
 def _draw_cost_value(layout, context):
     wm = context.window_manager
 
+    item = _target_item(context)
+    ctrl = get_rate_controller(item) if item is not None else None
+    if ctrl is not None:
+        sor = get_cost_item_schedule(ctrl)
+        sor_name = (sor.Name if sor is not None else "") or "—"
+        sor_type = (sor.PredefinedType or "") if sor is not None else ""
+
+        box = layout.box()
+        header = f"Rate controlled by: {sor_name}({sor_type})" if sor_type else f"Rate controlled by: {sor_name}"
+        box.label(text=header, icon="LINKED")
+        if ctrl.Identification:
+            box.label(text=f"Identification: {ctrl.Identification}")
+        if ctrl.Name:
+            box.label(text=f"Name: {ctrl.Name}")
+
+        try:
+            from bonsai import tool
+            file = tool.Ifc.get()
+            value, unit = _get_rate_value_and_unit(file, ctrl.id())
+            currency = ""
+            monetary = file.by_type("IfcMonetaryUnit")
+            if monetary:
+                currency = monetary[0].Currency or ""
+        except Exception:
+            value, unit, currency = None, "", ""
+        if value is not None:
+            total_text = f"Value: {value:.2f}" + (f" {currency}" if currency else "")
+            if unit:
+                total_text += f" / {unit}"
+            box.label(text=total_text)
+        return
+
     row = layout.row(align=True)
     row.prop_enum(wm, "cost_value_mode", 'SUM')
     row.prop_enum(wm, "cost_value_mode", 'FIXED')
     row.prop_enum(wm, "cost_value_mode", 'RATE_ANALYSIS')
     layout.separator(factor=0.3)
 
-    item = _target_item(context)
     deps = get_rate_dependents(item) if item is not None else []
     if deps:
         layout.label(text=f"Cost value controls {len(deps)} other value(s)", icon="INFO")
@@ -227,46 +270,83 @@ def _draw_cost_value(layout, context):
 
 
 def _draw_cost_value_sum(layout, context):
+    item = _target_item(context)
+    is_sum = item is not None and is_summary_cost_item(item)
+    if not is_sum:
+        layout.operator(
+            "cost_value.apply_sum",
+            text="Clear cost values and mark item as a Sum",
+            icon="ADD",
+        )
+        return
+
     layout.label(text="This item sums its children's costs.", icon="INFO")
-    layout.separator(factor=0.3)
-    row = layout.row(align=True)
-    row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
-    row.operator("cost_value.apply_sum", text="Apply Sum", icon="EXPORT")
 
 
 def _draw_cost_value_fixed(layout, context):
     wm = context.window_manager
-    item = _target_item(context)
-    ctrl = get_rate_controller(item) if item is not None else None
 
-    box = layout.box()
-    if ctrl is not None:
-        ident = ctrl.Identification or ctrl.Name or f"#{ctrl.id()}"
-        box.label(text=f"Cost value controlled by item {ident}", icon="ERROR")
-    col = box.column()
-    col.enabled = ctrl is None
-    col.prop(wm, "cost_value_fixed_amount")
-    row = col.row(align=True)
-    row.prop(wm, "cost_value_fixed_qty")
-    row.prop(wm, "cost_value_fixed_unit", text="Unit")
-    row.prop(wm, "cost_value_fixed_unit_enum", text="")
+    item = _target_item(context)
+    if item is not None and get_cost_item_children(item):
+        layout.label(text="This item has children — Fixed applies only to leaf items.", icon="ERROR")
+        layout.label(text="Use Sum to aggregate its children's costs instead.")
+        return
+
+    is_sum = item is not None and is_summary_cost_item(item)
+    is_rate_analysis = item is not None and item.ObjectType == "RATE_ANALYSIS"
+    if (is_sum or is_rate_analysis) and not wm.cost_value_fixed_drafting:
+        layout.operator(
+            "cost_value.start_fixed_draft",
+            text="Clear cost values and add new fixed cost value",
+            icon="ADD",
+        )
+        return
+
+    row = layout.row(align=True)
+    row.alignment = 'RIGHT'
+    row.operator("cost_value.add_fixed_component", text="", icon="ADD")
+    row.operator("cost_value.remove_fixed_component", text="", icon="REMOVE")
+    row.operator("cost_value.move_fixed_component_up", text="", icon="TRIA_UP")
+    row.operator("cost_value.move_fixed_component_down", text="", icon="TRIA_DOWN")
+
+    layout.template_list(
+        "FIXED_UL_values", "fixed",
+        wm, "cost_value_fixed_components",
+        wm, "cost_value_fixed_active_index",
+        rows=5,
+    )
+
+    comps = wm.cost_value_fixed_components
+    total = sum(c.unit_price for c in comps)
+    row = layout.row(align=True)
+    row.label(text=f"Total: {total:.2f}")
+    row.prop(wm, "cost_value_fixed_unit", text="")
+    if wm.cost_value_fixed_unit == 'USERDEFINED':
+        row.prop(wm, "cost_value_fixed_unit_custom", text="")
+    if wm.cost_value_fixed_unit_mixed:
+        layout.label(text="Rows had different units on load — unified above, review before applying.", icon="ERROR")
 
     layout.separator(factor=0.3)
     row = layout.row(align=True)
     row.operator("rate_analysis.load_from_ifc", text="Load", icon="FILE_REFRESH")
-    row.operator("cost_value.apply_fixed", text="Apply Fixed Price", icon="EXPORT")
+    row.operator("cost_value.apply_fixed", text="Apply Fixed", icon="EXPORT")
 
 
 def _draw_rate_analysis(layout, context):
     wm = context.window_manager
+
     item = _target_item(context)
-    ctrl = get_rate_controller(item) if item is not None else None
-    if ctrl is not None:
-        ident = ctrl.Identification or ctrl.Name or f"#{ctrl.id()}"
-        layout.label(text=f"Cost value controlled by item {ident}", icon="ERROR")
+    if item is not None and get_cost_item_children(item):
+        layout.label(text="This item has children — Rate Analysis applies only to leaf items.", icon="ERROR")
+        layout.label(text="Use Sum to aggregate its children's costs instead.")
+        return
+
+    is_applied = item is not None and item.ObjectType == "RATE_ANALYSIS"
+    if not is_applied and not wm.rate_analysis_drafting:
+        layout.operator("rate_analysis.start_draft", text="Clear cost values and add rate analysis", icon="ADD")
+        return
 
     body = layout.column()
-    body.enabled = ctrl is None
 
     row = body.row(align=True)
     row.operator("rate_analysis.add_component", text="", icon="ADD")
@@ -379,6 +459,11 @@ class MEAS_UL_rows(bpy.types.UIList):
 def _draw_quantities(layout, context):
     wm = context.window_manager
 
+    item = _target_item(context)
+    if item is not None and get_cost_item_children(item):
+        layout.label(text="This item has children — Quantities applies only to leaf items.", icon="ERROR")
+        return
+
     row = layout.row(align=True)
     row.prop(wm, "cost_quantities_type", text="")
     row.separator()
@@ -431,60 +516,4 @@ def _draw_quantities(layout, context):
     row.operator("cost_quantities.apply", text="Apply Quantities", icon="EXPORT")
 
 
-def _draw_rate_sync(layout, context):
-    item = _target_item(context)
-
-    if item is not None:
-        ctrl = get_rate_controller(item)
-        if ctrl is not None:
-            # This item borrows its price from a rate.
-            synced = is_item_in_sync(item)
-            sor = get_cost_item_schedule(ctrl)
-            sor_name = (sor.Name if sor is not None else "") or "rate"
-            ident = ctrl.Identification or ""
-            box = layout.box()
-            box.label(
-                text=f"Linked rate: {sor_name}" + (f"  [{ident}]" if ident else ""),
-                icon="CHECKMARK" if synced else "ERROR",
-            )
-            if synced is False:
-                op = box.operator("bonsai5d.resync_from_rate",
-                                  text="Resync from rate", icon="FILE_REFRESH")
-                op.item_id = item.id()
-
-        deps = get_rate_dependents(item)
-        if deps:
-            # This item is a rate controlling other (CME) items.
-            groups = group_dependents_by_schedule(item)
-            diffs = rate_dependent_diffs(item)
-            box = layout.box()
-            hrow = box.row()
-            hrow.label(text=f"Controls {len(deps)} item(s):")
-            if diffs:
-                hrow.label(text="out of sync", icon="ERROR")
-            else:
-                hrow.label(text="in sync", icon="CHECKMARK")
-            for schedule, items in groups:
-                name = (schedule.Name if schedule is not None else None) or "(no schedule)"
-                n = len(items)
-                box.label(text=f"   • {name}:  {n} item{'s' if n != 1 else ''}")
-            row = box.row(align=True)
-            op = row.operator("bonsai5d.propagate_rate",
-                              text="Propagate now…", icon="EXPORT")
-            op.rate_id = item.id()
-            op = row.operator("bonsai5d.resync_rate_values",
-                              text="Resync values", icon="FILE_REFRESH")
-            op.rate_id = item.id()
-
-        if get_rate_controller(item) is None and not get_rate_dependents(item):
-            layout.label(text="No rate link on this item", icon="UNLINKED")
-    else:
-        layout.label(text="No active cost item")
-
-    layout.separator(factor=0.5)
-    row = layout.row(align=True)
-    row.operator("bonsai5d.audit_schedule", text="Audit schedule", icon="VIEWZOOM")
-    row.operator("bonsai5d.resync_schedule", text="Resync all", icon="FILE_REFRESH")
-
-
-classes = [RATE_UL_analysis, MEAS_UL_rows, CostItemEditorPanel]
+classes = [RATE_UL_analysis, FIXED_UL_values, MEAS_UL_rows, CostItemEditorPanel]

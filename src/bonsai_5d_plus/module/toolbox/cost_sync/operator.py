@@ -8,16 +8,14 @@ rate (one-way EPU -> CME). See tool.cost for the underlying logic."""
 
 import bpy
 
-from ...tool.cost import (
+from ....tool.cost import (
     refresh_cost_ui,
     get_rate_dependents,
     group_dependents_by_schedule,
     rate_dependent_diffs,
-    is_item_in_sync,
     resync_rate_values,
     propagate_rate_to_dependents,
     align_item_to_rate,
-    get_cost_item_children,
 )
 
 try:
@@ -71,20 +69,6 @@ def schedule_propagate_popup(rate_id):
         bpy.app.timers.register(_cb, first_interval=0.01)
     except Exception:
         pass
-
-
-def _iter_schedule_items(file, schedule):
-    import ifcopenshell.util.cost as cost_util
-    out = []
-
-    def rec(item):
-        out.append(item)
-        for child in get_cost_item_children(item):
-            rec(child)
-
-    for root in cost_util.get_root_cost_items(schedule):
-        rec(root)
-    return out
 
 
 class CostSync_OT_PropagateRate(*_IfcOperatorBase):
@@ -183,65 +167,8 @@ class CostSync_OT_ResyncFromRate(*_IfcOperatorBase):
             self.report({"INFO"}, "Item has no linked rate")
 
 
-class CostSync_OT_AuditSchedule(bpy.types.Operator):
-    """Report how many items in the active schedule are out of sync with their rate."""
-    bl_idname = "bonsai5d.audit_schedule"
-    bl_label = "Audit schedule sync"
-    bl_options = {"REGISTER"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
-        except Exception:
-            return False
-
-    def execute(self, context):
-        from bonsai import tool
-        file = tool.Ifc.get()
-        sid = context.scene.BIMCostProperties.active_cost_schedule_id
-        schedule = file.by_id(int(sid))
-        items = _iter_schedule_items(file, schedule)
-        linked = [it for it in items if is_item_in_sync(it) is not None]
-        out_of_sync = [it for it in linked if is_item_in_sync(it) is False]
-        self.report(
-            {"INFO"},
-            f"{len(out_of_sync)} of {len(linked)} linked item(s) out of sync with their rate",
-        )
-        return {"FINISHED"}
-
-
-class CostSync_OT_ResyncSchedule(*_IfcOperatorBase):
-    """Re-align every linked item in the active schedule with its rate."""
-    bl_idname = "bonsai5d.resync_schedule"
-    bl_label = "Resync all rates in schedule"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        try:
-            return context.scene.BIMCostProperties.active_cost_schedule_id != 0
-        except Exception:
-            return False
-
-    def _execute(self, context):
-        from bonsai import tool
-        file = tool.Ifc.get()
-        sid = context.scene.BIMCostProperties.active_cost_schedule_id
-        schedule = file.by_id(int(sid))
-        n = 0
-        for item in _iter_schedule_items(file, schedule):
-            if is_item_in_sync(item) is False:
-                align_item_to_rate(tool, item)
-                n += 1
-        refresh_cost_ui(tool)
-        self.report({"INFO"}, f"Re-synced {n} linked item(s)")
-
-
 classes = [
     CostSync_OT_PropagateRate,
     CostSync_OT_ResyncValues,
     CostSync_OT_ResyncFromRate,
-    CostSync_OT_AuditSchedule,
-    CostSync_OT_ResyncSchedule,
 ]

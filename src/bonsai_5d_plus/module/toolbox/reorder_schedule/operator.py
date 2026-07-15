@@ -5,7 +5,7 @@
 
 import bpy
 
-from ...tool.cost import (
+from ....tool.cost import (
     refresh_cost_ui,
     get_cost_item_children,
     iter_hierarchy_codes,

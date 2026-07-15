@@ -18,7 +18,7 @@
 
 """Pure-Python price list parsers — zero bpy dependency.
 
-Imported by module/rate_list and module/import_export. Each regional parser
+Imported by module/rate_list_importer and module/import_export. Each regional parser
 lives in its own submodule; shared base class and category helpers are in
 ``base``. This package re-exports the public names so existing imports such as
 ``from ...core.parsers import ParserXpwe`` keep working unchanged.

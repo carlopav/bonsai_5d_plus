@@ -32,29 +32,24 @@ bl_info = {
 import traceback
 
 from .module import (
-    rate_list,
-    rate_analysis,
-    boq_to_sor,
-    bulk_update,
+    rate_list_importer,
+    cost_item_editor,
     classification,
     tender,
     prints_manager,
     import_export,
-    reorder_schedule,
-    cost_sync,
+    toolbox,
 )
 
 _MODULES = [
-    cost_sync,        # operators only (no panel); used by the Cost Item Editor
-    rate_analysis,
-    rate_list,
+    cost_item_editor,
+    rate_list_importer,
     classification,
     tender,
     prints_manager,
     import_export,
-    boq_to_sor,   # Sandbox (must be last so panel appears at bottom of sidebar)
-    bulk_update,
-    reorder_schedule,
+    toolbox,      # Toolbox (must be last so panel appears at bottom of sidebar);
+                  # also hosts cost_sync, whose operators the Cost Item Editor calls by id.
 ]
 
 

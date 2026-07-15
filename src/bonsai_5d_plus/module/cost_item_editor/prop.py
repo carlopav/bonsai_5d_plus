@@ -4,7 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
-from .operator import COMPONENT_CATEGORIES, _get_project_unit_items, _on_unit_enum_select
+from .operator import COMPONENT_CATEGORIES, FIXED_UNIT_ITEMS
 from ...tool.cost import QTY_TYPE_INFO
 
 _QTY_ENUM_ITEMS = [(k, v['label'], v['label']) for k, v in QTY_TYPE_INFO.items()]
@@ -99,6 +99,12 @@ def register():
         default=False,
         options={'SKIP_SAVE'},
     )
+    bpy.types.WindowManager.rate_analysis_drafting = bpy.props.BoolProperty(
+        name="Drafting Rate Analysis",
+        description="A new rate analysis is being built for the current item, not yet applied to IFC",
+        default=False,
+        options={'SKIP_SAVE'},
+    )
     bpy.types.WindowManager.rate_analysis_auto_load = bpy.props.BoolProperty(
         name="Auto Load",
         description="Automatically reload data when the active cost item changes",
@@ -114,28 +120,31 @@ def register():
         ],
         default='FIXED',
     )
-    bpy.types.WindowManager.cost_value_fixed_amount = bpy.props.FloatProperty(
-        name="Price",
-        description="Flat price for this cost item, with no breakdown",
-        precision=2,
-        default=0.0,
+    bpy.types.WindowManager.cost_value_fixed_components = bpy.props.CollectionProperty(
+        type=RateAnalysisComponent,
     )
-    bpy.types.WindowManager.cost_value_fixed_qty = bpy.props.FloatProperty(
-        name="Qty",
-        description="Reference quantity the price above is for (optional)",
-        precision=3,
-        default=0.0,
+    bpy.types.WindowManager.cost_value_fixed_active_index = bpy.props.IntProperty(default=0)
+    bpy.types.WindowManager.cost_value_fixed_drafting = bpy.props.BoolProperty(
+        name="Drafting Fixed Cost Values",
+        description="New fixed cost values are being built for the current item, not yet applied to IFC",
+        default=False,
+        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.cost_value_fixed_unit = bpy.props.StringProperty(
-        name="Unit of Measure",
-        description="Unit of measure for the reference quantity (e.g. mq, mc, m, cad)",
+    bpy.types.WindowManager.cost_value_fixed_unit = bpy.props.EnumProperty(
+        name="Unit",
+        description="Unit of measure shared by all fixed cost values on this item",
+        items=FIXED_UNIT_ITEMS,
+        default='NONE',
+    )
+    bpy.types.WindowManager.cost_value_fixed_unit_custom = bpy.props.StringProperty(
+        name="Custom Unit",
+        description="Custom unit string, used when Unit is set to Custom…",
         default="",
     )
-    bpy.types.WindowManager.cost_value_fixed_unit_enum = bpy.props.EnumProperty(
-        name="Unit (project)",
-        description="Pick a unit already used in this project",
-        items=_get_project_unit_items,
-        update=_on_unit_enum_select,
+    bpy.types.WindowManager.cost_value_fixed_unit_mixed = bpy.props.BoolProperty(
+        name="Mixed Units on Load",
+        description="The loaded cost values had different units — unified to one on load, review before applying",
+        default=False,
         options={'SKIP_SAVE'},
     )
     bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
@@ -159,12 +168,15 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_item_description
     del bpy.types.WindowManager.rate_analysis_target_ifc_id
     del bpy.types.WindowManager.rate_analysis_editing_description
+    del bpy.types.WindowManager.rate_analysis_drafting
     del bpy.types.WindowManager.rate_analysis_auto_load
     del bpy.types.WindowManager.cost_value_mode
-    del bpy.types.WindowManager.cost_value_fixed_amount
-    del bpy.types.WindowManager.cost_value_fixed_qty
+    del bpy.types.WindowManager.cost_value_fixed_components
+    del bpy.types.WindowManager.cost_value_fixed_active_index
+    del bpy.types.WindowManager.cost_value_fixed_drafting
     del bpy.types.WindowManager.cost_value_fixed_unit
-    del bpy.types.WindowManager.cost_value_fixed_unit_enum
+    del bpy.types.WindowManager.cost_value_fixed_unit_custom
+    del bpy.types.WindowManager.cost_value_fixed_unit_mixed
     del bpy.types.WindowManager.cost_quantities
     del bpy.types.WindowManager.cost_quantities_active_index
     del bpy.types.WindowManager.cost_quantities_type

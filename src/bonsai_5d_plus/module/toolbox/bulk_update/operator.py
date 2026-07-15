@@ -5,7 +5,7 @@
 
 import bpy
 from . import data as _data
-from ...tool.cost import refresh_cost_ui, resync_rate_values
+from ....tool.cost import refresh_cost_ui, resync_rate_values
 
 try:
     from bonsai import tool as _bonsai_tool

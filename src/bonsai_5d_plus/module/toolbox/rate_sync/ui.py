@@ -6,23 +6,23 @@
 import bpy
 
 
-class ReorderSchedulePanel(bpy.types.Panel):
-    bl_label = "Reorder Cost Schedule"
-    bl_idname = "SCENE_PT_reorder_cost_schedule"
+class RateSyncPanel(bpy.types.Panel):
+    bl_label = "Rate Sync"
+    bl_idname = "SCENE_PT_bonsai5d_rate_sync"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
-    bl_parent_id = "SCENE_PT_bonsai5d_sandbox"
+    bl_parent_id = "SCENE_PT_bonsai5d_toolbox"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
         row = layout.row(align=True)
-        row.operator("reorder_schedule.reorder_identifications",        text="Reorder All",          icon="SORTALPHA")
-        row.operator("reorder_schedule.reorder_keep_root_summary",      text="Keep Levels Above",    icon="OUTLINER")
+        row.operator("bonsai5d.audit_schedule", text="Audit schedule", icon="VIEWZOOM")
+        row.operator("bonsai5d.resync_schedule", text="Resync all", icon="FILE_REFRESH")
 
 
-classes = [ReorderSchedulePanel]
+classes = [RateSyncPanel]
 
 
 def register():

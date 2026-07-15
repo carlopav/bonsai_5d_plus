@@ -31,25 +31,13 @@ class COST_UL_MismatchedRates(bpy.types.UIList):
             op.direction = direction
 
 
-class SandboxPanel(bpy.types.Panel):
-    bl_label = "Sandbox"
-    bl_idname = "SCENE_PT_bonsai5d_sandbox"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Bonsai5D+"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        pass
-
-
 class BoQToSoRPanel(bpy.types.Panel):
     bl_label = "BoQ to Schedule of Rates"
     bl_idname = "SCENE_PT_boq_to_schedule_of_rates"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Bonsai5D+"
-    bl_parent_id = "SCENE_PT_bonsai5d_sandbox"
+    bl_parent_id = "SCENE_PT_bonsai5d_toolbox"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -74,4 +62,4 @@ class BoQToSoRPanel(bpy.types.Panel):
         layout.operator("bim.boq_to_schedule_of_rates", icon="LINENUMBERS_ON")
 
 
-classes = [COST_UL_MismatchedRates, SandboxPanel, BoQToSoRPanel]
+classes = [COST_UL_MismatchedRates, BoQToSoRPanel]

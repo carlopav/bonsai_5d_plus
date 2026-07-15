@@ -123,13 +123,13 @@ def _augment_csv(ifc, csv_text, hierarchy_map=None):
     return out.getvalue()
 
 
-def _ensure_ifc5d():
+def _ensure_module(name):
+    # Bonsai wheels path fallback
     try:
-        import ifc5d  # noqa: F401
+        __import__(name)
         return True
     except ImportError:
         pass
-    # Bonsai wheels path fallback
     appdata = os.environ.get("APPDATA", "")
     site = os.path.join(
         appdata,
@@ -138,50 +138,22 @@ def _ensure_ifc5d():
     if os.path.isdir(site) and site not in sys.path:
         sys.path.insert(0, site)
     try:
-        import ifc5d  # noqa: F401
+        __import__(name)
         return True
     except ImportError:
         return False
+
+
+def _ensure_ifc5d():
+    return _ensure_module("ifc5d")
 
 
 def _ensure_typst():
-    try:
-        import typst  # noqa: F401
-        return True
-    except ImportError:
-        pass
-    appdata = os.environ.get("APPDATA", "")
-    site = os.path.join(
-        appdata,
-        r"Blender Foundation\Blender\5.1\extensions\.local\lib\python3.13\site-packages",
-    )
-    if os.path.isdir(site) and site not in sys.path:
-        sys.path.insert(0, site)
-    try:
-        import typst  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    return _ensure_module("typst")
 
 
 def _ensure_odf():
-    try:
-        import odf  # noqa: F401
-        return True
-    except ImportError:
-        pass
-    appdata = os.environ.get("APPDATA", "")
-    site = os.path.join(
-        appdata,
-        r"Blender Foundation\Blender\5.1\extensions\.local\lib\python3.13\site-packages",
-    )
-    if os.path.isdir(site) and site not in sys.path:
-        sys.path.insert(0, site)
-    try:
-        import odf  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    return _ensure_module("odf")
 
 
 # ESTIMATE / COSTPLAN / BUDGET are priced BoQ-like (see PRICED_BOQ_TYPES):
@@ -361,7 +333,9 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         # (the Typst templates) lives in this addon under typst/.
         from . import typst_render as _tr
 
-        data = _extract_schedule_csv(context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type)
+        data = _extract_schedule_csv(
+            context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type
+        )
         if "error" in data:
             self.report({"ERROR"}, data["error"])
             return {"CANCELLED"}
@@ -514,7 +488,9 @@ class ExportScheduleToOdsOperator(bpy.types.Operator):
         # lives in this addon, in ods_render.py.
         from . import ods_render as _or
 
-        data = _extract_schedule_csv(context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type)
+        data = _extract_schedule_csv(
+            context, self.should_print_hierarchy, self.hierarchy_start_level, self.force_schedule_type
+        )
         if "error" in data:
             self.report({"ERROR"}, data["error"])
             return {"CANCELLED"}

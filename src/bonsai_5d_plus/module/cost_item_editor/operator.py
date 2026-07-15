@@ -21,7 +21,7 @@ from ...tool.cost import (
     duplicate_and_relink_rate,
     is_summary_cost_item,
 )
-from ..cost_sync.operator import schedule_propagate_popup
+from ..toolbox.cost_sync.operator import schedule_propagate_popup
 
 try:
     from bonsai import tool as _bonsai_tool
@@ -41,6 +41,20 @@ COMPONENT_CATEGORIES = (
     ('EQUIPMENT',    "Equipment",    "Equipment rental costs (noli)"),
     ('MATERIAL',     "Material",     "Material costs (materiali)"),
     ('SAFETY',       "Safety",       "Safety costs (oneri sicurezza)"),
+)
+
+# Shared unit of measure offered for the whole Fixed cost-value list (one unit
+# for the item, not per-row). 'USERDEFINED' reveals a free-text field.
+FIXED_UNIT_ITEMS = (
+    ('NONE',        "— (none)", "No unit"),
+    ('mq',          "m² (mq)",  "Square metre"),
+    ('mc',          "m³ (mc)",  "Cubic metre"),
+    ('m',           "m",        "Metre"),
+    ('kg',          "kg",       "Kilogram"),
+    ('t',           "t",        "Tonne"),
+    ('h',           "h",        "Hour"),
+    ('cad',         "cad",      "Cadauno / each"),
+    ('USERDEFINED', "Custom…",  "Enter a custom unit string"),
 )
 
 _TO_IFC = {
@@ -156,26 +170,37 @@ def _remove_description_text():
 # IFC helpers
 # ---------------------------------------------------------------------------
 
-def _get_rate_current_value(file, source_ifc_id):
+def _get_rate_value_and_unit(file, source_ifc_id):
+    """(total_value, unit_str) for a rate item's current CostValues, or (None, "")."""
     try:
         rate_item = file.by_id(source_ifc_id)
         cvs = list(rate_item.CostValues or [])
         if not cvs:
-            return None
-        # Nested structure: summary CV holds the total directly
+            return None, ""
+        # Nested structure: summary CV holds the total directly, unit on the same CV
         if len(cvs) == 1 and (getattr(cvs[0], "Components", None) or []):
             v = cvs[0].AppliedValue
-            return float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else None
-        # Flat structure (legacy / plain EPU): sum all
-        total, found = 0.0, False
+            total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else None
+            _, unit_str = _read_unit_basis(cvs[0])
+            return total, unit_str or ""
+        # Flat structure (legacy / plain EPU / Fixed): sum all, take the first unit found
+        total, found, unit_str = 0.0, False, ""
         for cv in cvs:
             if cv.AppliedValue is not None:
                 v = cv.AppliedValue
                 total += float(v.wrappedValue if hasattr(v, "wrappedValue") else v)
                 found = True
-        return total if found else None
+            if not unit_str:
+                _, u = _read_unit_basis(cv)
+                if u:
+                    unit_str = u
+        return (total if found else None), unit_str
     except Exception:
-        return None
+        return None, ""
+
+
+def _get_rate_current_value(file, source_ifc_id):
+    return _get_rate_value_and_unit(file, source_ifc_id)[0]
 
 
 def _get_totals(wm):
@@ -200,49 +225,6 @@ def _read_unit_basis(cv):
         return qty, unit_str
     except Exception:
         return None, None
-
-
-_UNITS_ENUM_TTL = 2.0
-_project_units_cache: tuple = (0.0, None)
-
-
-def _scan_project_units(file):
-    """Return sorted unit strings already used as a CostValue.UnitBasis in the project."""
-    seen = []
-    for cv in file.by_type("IfcCostValue"):
-        ub = getattr(cv, "UnitBasis", None)
-        if ub is None:
-            continue
-        try:
-            unit_str = ifc_unit_to_str(ub.UnitComponent)
-        except Exception:
-            continue
-        if unit_str and unit_str not in seen:
-            seen.append(unit_str)
-    return sorted(seen)
-
-
-def _get_project_unit_items(self, context):
-    """Dynamic EnumProperty items: units already used in the project's CostValues."""
-    global _project_units_cache
-    ts, result = _project_units_cache
-    if result is not None and _time.monotonic() - ts < _UNITS_ENUM_TTL:
-        return result
-    items = [('', "(free text)", "Type a custom unit in the field below")]
-    try:
-        from bonsai import tool
-        file = tool.Ifc.get()
-        if file:
-            items += [(u, u, "") for u in _scan_project_units(file)]
-    except Exception:
-        pass
-    _project_units_cache = (_time.monotonic(), items)
-    return items
-
-
-def _on_unit_enum_select(self, context):
-    if self.cost_value_fixed_unit_enum:
-        self.cost_value_fixed_unit = self.cost_value_fixed_unit_enum
 
 
 def _pct_label(label, pct):
@@ -434,9 +416,13 @@ def _load_cost_item(context, item_id=None):
     wm.rate_analysis_profit_pct = 0.0
     wm.rate_analysis_rounding = 0.0
     wm.rate_analysis_unit = ""
-    wm.cost_value_fixed_amount = 0.0
-    wm.cost_value_fixed_qty = 0.0
-    wm.cost_value_fixed_unit = ""
+    wm.cost_value_fixed_components.clear()
+    wm.cost_value_fixed_active_index = 0
+    wm.cost_value_fixed_unit = 'NONE'
+    wm.cost_value_fixed_unit_custom = ""
+    wm.cost_value_fixed_unit_mixed = False
+    wm.rate_analysis_drafting = False
+    wm.cost_value_fixed_drafting = False
     wm.rate_analysis_target_ifc_id = cost_item.id()
     _read_cost_item_info(context)
 
@@ -448,22 +434,7 @@ def _load_cost_item(context, item_id=None):
         wm.cost_value_mode = 'SUM'
         found = True
 
-    elif (
-        len(cost_values) == 1
-        and not (getattr(cost_values[0], "Components", None) or [])
-        and (cost_values[0].Category or "") not in _ALL_PA_CATEGORIES
-    ):
-        wm.cost_value_mode = 'FIXED'
-        found = True
-        cv = cost_values[0]
-        v = cv.AppliedValue
-        v = v.wrappedValue if hasattr(v, "wrappedValue") else v
-        wm.cost_value_fixed_amount = float(v) if v is not None else 0.0
-        qty, unit_str = _read_unit_basis(cv)
-        wm.cost_value_fixed_qty = qty if qty is not None else 0.0
-        wm.cost_value_fixed_unit = unit_str if unit_str and unit_str != "1" else ""
-
-    elif cost_values:
+    elif cost_item.ObjectType == "RATE_ANALYSIS":
         wm.cost_value_mode = 'RATE_ANALYSIS'
 
         # Nested structure: one summary CV with sub-components
@@ -528,6 +499,37 @@ def _load_cost_item(context, item_id=None):
 
     else:
         wm.cost_value_mode = 'FIXED'
+        found = True
+        seen_units = []  # order of first appearance; more than one entry = mixed units
+        for cv in cost_values:
+            comp = wm.cost_value_fixed_components.add()
+            comp.category = _FROM_IFC.get(cv.Category or "", 'NONE')
+            comp.description = cv.Name or ""
+
+            v = cv.AppliedValue
+            comp.unit_price = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
+
+            _, unit_str = _read_unit_basis(cv)
+            if unit_str and unit_str != "1" and unit_str not in seen_units:
+                seen_units.append(unit_str)
+
+            src_id = _parse_cv_source_id(cv)
+            if src_id is not None:
+                try:
+                    comp.source_ifc_id = src_id
+                    comp.source_identification = file.by_id(src_id).Identification or ""
+                except Exception:
+                    pass
+
+        if seen_units:
+            unit_str = seen_units[0]
+            known = {i[0] for i in FIXED_UNIT_ITEMS}
+            if unit_str in known:
+                wm.cost_value_fixed_unit = unit_str
+            else:
+                wm.cost_value_fixed_unit = 'USERDEFINED'
+                wm.cost_value_fixed_unit_custom = unit_str
+            wm.cost_value_fixed_unit_mixed = len(seen_units) > 1
 
     _load_quantities(context, cost_item)
     return found
@@ -702,6 +704,84 @@ class RA_OT_ClearAll(bpy.types.Operator):
         wm.rate_analysis_profit_pct = 0.0
         wm.rate_analysis_rounding = 0.0
         return {'FINISHED'}
+
+
+class RA_OT_StartDraft(bpy.types.Operator):
+    bl_idname = "rate_analysis.start_draft"
+    bl_label = "Clear Cost Values and Add Rate Analysis"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.window_manager.rate_analysis_target_ifc_id != 0
+
+    def execute(self, context):
+        wm = context.window_manager
+        wm.rate_analysis_components.clear()
+        wm.rate_analysis_active_index = 0
+        wm.rate_analysis_overhead_pct = 15.0
+        wm.rate_analysis_profit_pct = 10.0
+        wm.rate_analysis_rounding = 0.0
+        wm.rate_analysis_unit = ""
+        wm.rate_analysis_drafting = True
+        return {'FINISHED'}
+
+
+class CV_OT_StartFixedDraft(bpy.types.Operator):
+    bl_idname = "cost_value.start_fixed_draft"
+    bl_label = "Clear Cost Values and Add New Fixed Cost Value"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.window_manager.rate_analysis_target_ifc_id != 0
+
+    def execute(self, context):
+        wm = context.window_manager
+        wm.cost_value_fixed_components.clear()
+        wm.cost_value_fixed_active_index = 0
+        wm.cost_value_fixed_unit = 'NONE'
+        wm.cost_value_fixed_unit_custom = ""
+        wm.cost_value_fixed_unit_mixed = False
+        wm.cost_value_fixed_drafting = True
+        return {'FINISHED'}
+
+
+# ---------------------------------------------------------------------------
+# Fixed value list operators
+# ---------------------------------------------------------------------------
+
+class CV_OT_AddFixedComponent(bpy.types.Operator):
+    bl_idname = "cost_value.add_fixed_component"
+    bl_label = "Add Cost Value"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        wm = context.window_manager
+        wm.cost_value_fixed_components.add()
+        wm.cost_value_fixed_active_index = len(wm.cost_value_fixed_components) - 1
+        return {'FINISHED'}
+
+
+class CV_OT_RemoveFixedComponent(_WMListRemove):
+    bl_idname = "cost_value.remove_fixed_component"
+    bl_label = "Remove Cost Value"
+    _collection_attr = "cost_value_fixed_components"
+    _index_attr      = "cost_value_fixed_active_index"
+
+
+class CV_OT_MoveFixedComponentUp(_WMListMoveUp):
+    bl_idname = "cost_value.move_fixed_component_up"
+    bl_label = "Move Cost Value Up"
+    _collection_attr = "cost_value_fixed_components"
+    _index_attr      = "cost_value_fixed_active_index"
+
+
+class CV_OT_MoveFixedComponentDown(_WMListMoveDown):
+    bl_idname = "cost_value.move_fixed_component_down"
+    bl_label = "Move Cost Value Down"
+    _collection_attr = "cost_value_fixed_components"
+    _index_attr      = "cost_value_fixed_active_index"
 
 
 class RA_OT_RefreshComponentRate(bpy.types.Operator):
@@ -944,7 +1024,7 @@ class CV_OT_ApplySum(*_IfcOperatorBase):
 
 
 class CV_OT_ApplyFixed(*_IfcOperatorBase):
-    """Write a single flat CostValue (no breakdown) to the active cost item."""
+    """Write one or more flat CostValues (no breakdown) to the active cost item."""
     bl_idname = "cost_value.apply_fixed"
     bl_label = "Apply Fixed Price"
     bl_options = {'REGISTER', 'UNDO'}
@@ -977,11 +1057,24 @@ class CV_OT_ApplyFixed(*_IfcOperatorBase):
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
         _remove_analysis_values(tool, cost_item)
 
-        cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
-        tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
-            "AppliedValue": round(wm.cost_value_fixed_amount, 2),
-        })
-        set_unit_basis(file, cv, wm.cost_value_fixed_qty, wm.cost_value_fixed_unit)
+        if wm.cost_value_fixed_unit == 'USERDEFINED':
+            unit = wm.cost_value_fixed_unit_custom
+        elif wm.cost_value_fixed_unit == 'NONE':
+            unit = ""
+        else:
+            unit = wm.cost_value_fixed_unit
+
+        for comp in wm.cost_value_fixed_components:
+            cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+            tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
+                "Name": comp.description or None,
+                "Category": _TO_IFC.get(comp.category),
+                "AppliedValue": round(comp.unit_price, 2),
+            })
+            if unit:
+                set_unit_basis(file, cv, 1.0, unit)
+            if comp.source_ifc_id:
+                cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
 
         resync_rate_values(tool, cost_item)
         refresh_cost_ui(tool)
@@ -1456,6 +1549,12 @@ classes = [
     RA_OT_MoveUp,
     RA_OT_MoveDown,
     RA_OT_ClearAll,
+    RA_OT_StartDraft,
+    CV_OT_StartFixedDraft,
+    CV_OT_AddFixedComponent,
+    CV_OT_RemoveFixedComponent,
+    CV_OT_MoveFixedComponentUp,
+    CV_OT_MoveFixedComponentDown,
     RA_OT_RefreshComponentRate,
     RA_OT_EditDescription,
     RA_OT_ApplyDescription,
