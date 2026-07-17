@@ -13,6 +13,7 @@ from .operator import (
     _DESCRIPTION_TEXT_NAME,
     _QTY_UNIT_ABBR,
     _compute_partial_qty,
+    _unit_display_label,
 )
 from ...tool.cost import (
     get_rate_controller,
@@ -92,7 +93,8 @@ class RATE_UL_analysis(bpy.types.UIList):
         else:
             name_col.label(text=item.description or "(no description)")
         subtotal = item.qty * item.unit_price
-        row.label(text=f"{item.qty:.3g} {item.unit}  ×  {item.unit_price:.2f}  =  {subtotal:.2f}")
+        unit_label = _unit_display_label(item.unit, item.unit_custom)
+        row.label(text=f"{item.qty:.3g} {unit_label}  ×  {item.unit_price:.2f}  =  {subtotal:.2f}")
         if item.needs_rate_update:
             op = row.operator(
                 "rate_analysis.refresh_component_rate",
@@ -382,6 +384,8 @@ def _draw_rate_analysis(layout, context):
         row = box.row(align=True)
         row.prop(comp, "qty")
         row.prop(comp, "unit", text="UM")
+        if comp.unit == 'USERDEFINED':
+            row.prop(comp, "unit_custom", text="")
         row.prop(comp, "unit_price", text="Unit Price")
         row = box.row()
         row.label(text=f"Subtotal: {comp.qty * comp.unit_price:.2f}")
@@ -424,6 +428,8 @@ def _draw_rate_analysis(layout, context):
     row_label = split.row(align=True)
     row_label.label(text="FINAL PRICE:", icon="DISC")
     row_label.prop(wm, "rate_analysis_unit", text="")
+    if wm.rate_analysis_unit == 'USERDEFINED':
+        row_label.prop(wm, "rate_analysis_unit_custom", text="")
     r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{final:.2f}")
 
     layout.separator(factor=0.3)

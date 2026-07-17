@@ -11,9 +11,11 @@ from ...tool.cost import (
     QTY_TYPE_INFO,
     QTY_FROM_IFC_CLASS,
     refresh_cost_ui,
-    set_unit_basis,
     ifc_unit_to_str,
-    ifc_quantity_type,
+    project_unit_entities,
+    resolve_unit_choice,
+    set_unit_basis_entity,
+    ifc_quantity_type_from_unit,
     get_rate_dependents,
     resync_rate_values,
     get_rate_controller,
@@ -43,19 +45,84 @@ COMPONENT_CATEGORIES = (
     ('SAFETY',       "Safety",       "Safety costs (oneri sicurezza)"),
 )
 
-# Shared unit of measure offered for the whole Fixed cost-value list (one unit
-# for the item, not per-row). 'USERDEFINED' reveals a free-text field.
-FIXED_UNIT_ITEMS = (
-    ('NONE',        "— (none)", "No unit"),
-    ('mq',          "m² (mq)",  "Square metre"),
-    ('mc',          "m³ (mc)",  "Cubic metre"),
-    ('m',           "m",        "Metre"),
-    ('kg',          "kg",       "Kilogram"),
-    ('t',           "t",        "Tonne"),
-    ('h',           "h",        "Hour"),
-    ('cad',         "cad",      "Cadauno / each"),
-    ('USERDEFINED', "Custom…",  "Enter a custom unit string"),
-)
+# ---------------------------------------------------------------------------
+# Unit of measure picker — shared by the Fixed panel's list-wide unit, the
+# Rate Analysis panel's per-component unit, and its overall "final price"
+# unit. Primary choices are the project's own declared units (IfcProject.
+# UnitsInContext.Units), shown as IFC-native "UNITTYPE / NAME" labels (no
+# abbreviation translation) via Bonsai's own tool.Cost.format_unit(). A unit
+# already referenced by the item being edited is always included even if it
+# isn't part of the project's declared units (legacy files).
+# ---------------------------------------------------------------------------
+
+_unit_items_cache = []  # prevents GC of the enum item strings (dynamic items)
+
+
+def _extra_unit_entities(file, wm):
+    """Unit entities used by the currently loaded item's cost values that
+    aren't necessarily in the project's declared units (e.g. legacy entities
+    created by get_or_create_unit_entity before this picker existed)."""
+    target_id = getattr(wm, "rate_analysis_target_ifc_id", 0)
+    if not target_id:
+        return []
+    try:
+        item = file.by_id(target_id)
+    except Exception:
+        return []
+    found = []
+    seen_ids = set()
+    for cv in (item.CostValues or []):
+        for sub_cv in [cv] + list(getattr(cv, "Components", None) or []):
+            ub = getattr(sub_cv, "UnitBasis", None)
+            unit = getattr(ub, "UnitComponent", None) if ub is not None else None
+            if unit is not None and unit.id() not in seen_ids:
+                seen_ids.add(unit.id())
+                found.append(unit)
+    return found
+
+
+def _unit_enum_items(self, context):
+    global _unit_items_cache
+    items = [('NONE', "— (none)", "No unit")]
+    try:
+        from bonsai import tool
+        file = tool.Ifc.get()
+        if file is not None:
+            seen_ids = set()
+            for unit in project_unit_entities(file):
+                items.append((str(unit.id()), tool.Cost.format_unit(unit), ""))
+                seen_ids.add(unit.id())
+            for unit in _extra_unit_entities(file, context.window_manager):
+                if unit.id() not in seen_ids:
+                    label = f"{tool.Cost.format_unit(unit)}  (not in project units)"
+                    items.append((str(unit.id()), label, ""))
+                    seen_ids.add(unit.id())
+    except Exception:
+        pass
+    items.append(('USERDEFINED', "Custom…", "Enter a custom unit string"))
+    _unit_items_cache = items
+    return _unit_items_cache
+
+
+def _unit_display_label(unit_value, custom_str=""):
+    """Compact label for a resolved unit choice — for list rows, not the
+    picker itself (which uses the fuller IFC-native format_unit label)."""
+    if not unit_value or unit_value == 'NONE':
+        return ""
+    if unit_value == 'USERDEFINED':
+        return custom_str or ""
+    try:
+        from bonsai import tool
+        file = tool.Ifc.get()
+        unit = file.by_id(int(unit_value)) if file else None
+    except Exception:
+        unit = None
+    if unit is None:
+        return ""
+    name = unit.Name or ""
+    prefix = getattr(unit, "Prefix", None)
+    return f"{prefix} {name}" if prefix else name
+
 
 _TO_IFC = {
     'SUB_CONTRACT': 'Sub-Contract',
@@ -225,6 +292,32 @@ def _read_unit_basis(cv):
         return qty, unit_str
     except Exception:
         return None, None
+
+
+def _read_unit_basis_entity(cv):
+    """Like _read_unit_basis, but returns the raw unit entity instead of an
+    abbreviation string — used to populate the unit picker on load."""
+    ub = getattr(cv, "UnitBasis", None)
+    if ub is None:
+        return None, None
+    try:
+        vc = ub.ValueComponent
+        qty = float(vc.wrappedValue if hasattr(vc, "wrappedValue") else vc)
+        return qty, ub.UnitComponent
+    except Exception:
+        return None, None
+
+
+def _unit_enum_value_for(unit_entity):
+    """Unit picker enum identifier for a resolved unit entity: 'NONE' for no
+    entity or the dimensionless "1" placeholder (set_unit_basis_entity's
+    fallback), else the entity's IFC step-id as a string."""
+    if unit_entity is None:
+        return 'NONE'
+    if unit_entity.is_a("IfcContextDependentUnit") and unit_entity.UnitType == "USERDEFINED" \
+            and (unit_entity.Name or "") == "1":
+        return 'NONE'
+    return str(unit_entity.id())
 
 
 def _pct_label(label, pct):
@@ -415,7 +508,8 @@ def _load_cost_item(context, item_id=None):
     wm.rate_analysis_overhead_pct = 0.0
     wm.rate_analysis_profit_pct = 0.0
     wm.rate_analysis_rounding = 0.0
-    wm.rate_analysis_unit = ""
+    wm.rate_analysis_unit = 'NONE'
+    wm.rate_analysis_unit_custom = ""
     wm.cost_value_fixed_components.clear()
     wm.cost_value_fixed_active_index = 0
     wm.cost_value_fixed_unit = 'NONE'
@@ -440,8 +534,8 @@ def _load_cost_item(context, item_id=None):
         # Nested structure: one summary CV with sub-components
         if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
             summary_cv = cost_values[0]
-            _, unit_str = _read_unit_basis(summary_cv)
-            wm.rate_analysis_unit = unit_str if unit_str and unit_str != "1" else ""
+            _, unit_entity = _read_unit_basis_entity(summary_cv)
+            wm.rate_analysis_unit = _unit_enum_value_for(unit_entity)
             cost_values = list(summary_cv.Components or [])
 
         for cv in cost_values:
@@ -456,10 +550,10 @@ def _load_cost_item(context, item_id=None):
                 v = cv.AppliedValue
                 line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
 
-                qty, unit_str = _read_unit_basis(cv)
+                qty, unit_entity = _read_unit_basis_entity(cv)
                 if qty is not None:
                     comp.qty = qty
-                    comp.unit = unit_str or ""
+                    comp.unit = _unit_enum_value_for(unit_entity)
                     comp.unit_price = round(line_total / qty, 6) if qty else line_total
                 else:
                     comp.unit_price = line_total
@@ -509,9 +603,10 @@ def _load_cost_item(context, item_id=None):
             v = cv.AppliedValue
             comp.unit_price = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
 
-            _, unit_str = _read_unit_basis(cv)
-            if unit_str and unit_str != "1" and unit_str not in seen_units:
-                seen_units.append(unit_str)
+            _, unit_entity = _read_unit_basis_entity(cv)
+            unit_value = _unit_enum_value_for(unit_entity)
+            if unit_value != 'NONE' and unit_value not in seen_units:
+                seen_units.append(unit_value)
 
             src_id = _parse_cv_source_id(cv)
             if src_id is not None:
@@ -522,13 +617,7 @@ def _load_cost_item(context, item_id=None):
                     pass
 
         if seen_units:
-            unit_str = seen_units[0]
-            known = {i[0] for i in FIXED_UNIT_ITEMS}
-            if unit_str in known:
-                wm.cost_value_fixed_unit = unit_str
-            else:
-                wm.cost_value_fixed_unit = 'USERDEFINED'
-                wm.cost_value_fixed_unit_custom = unit_str
+            wm.cost_value_fixed_unit = seen_units[0]
             wm.cost_value_fixed_unit_mixed = len(seen_units) > 1
 
     _load_quantities(context, cost_item)
@@ -536,11 +625,20 @@ def _load_cost_item(context, item_id=None):
 
 
 _handler_last_check = 0.0
+# Last Bonsai-native active_cost_item id observed by the handler — tracked
+# separately from wm.rate_analysis_target_ifc_id so that operators which
+# deliberately pin a *different* item without touching Bonsai's own tree
+# selection (e.g. "Load Controlling Item", which may point at an item in a
+# schedule not even shown in the current tree) aren't immediately clobbered
+# by auto-load on the next scene update. Auto-load should only kick in when
+# the user actually changes Bonsai's native selection, not merely because it
+# differs from our pinned target.
+_handler_last_seen_active_id = 0
 
 
 @bpy.app.handlers.persistent
 def _auto_load_handler(scene, depsgraph):
-    global _handler_last_check
+    global _handler_last_check, _handler_last_seen_active_id
     t = _time.monotonic()
     if t - _handler_last_check < 0.1:
         return
@@ -553,6 +651,9 @@ def _auto_load_handler(scene, depsgraph):
         if props.active_cost_item is None or props.active_cost_schedule_id == 0:
             return
         item_id = props.active_cost_item.ifc_definition_id
+        if item_id == _handler_last_seen_active_id:
+            return
+        _handler_last_seen_active_id = item_id
         if item_id == wm.rate_analysis_target_ifc_id:
             return
         _load_cost_item(bpy.context)
@@ -722,7 +823,8 @@ class RA_OT_StartDraft(bpy.types.Operator):
         wm.rate_analysis_overhead_pct = 15.0
         wm.rate_analysis_profit_pct = 10.0
         wm.rate_analysis_rounding = 0.0
-        wm.rate_analysis_unit = ""
+        wm.rate_analysis_unit = 'NONE'
+        wm.rate_analysis_unit_custom = ""
         wm.rate_analysis_drafting = True
         return {'FINISHED'}
 
@@ -961,7 +1063,8 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         for comp in ordered:
             line_total = round(comp.qty * comp.unit_price, 2)
             cv = _add_cv(comp.description, _TO_IFC.get(comp.category), line_total)
-            set_unit_basis(file, cv, comp.qty, comp.unit)
+            unit_entity = resolve_unit_choice(file, comp.unit, comp.unit_custom)
+            set_unit_basis_entity(file, cv, comp.qty, unit_entity)
             if comp.source_ifc_id:
                 cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
             sub_cvs.append(cv)
@@ -977,7 +1080,8 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
             "AppliedValue": round(final, 2),
             "ArithmeticOperator": "ADD",
         })
-        set_unit_basis(file, cv_summary, 1.0, wm.rate_analysis_unit)
+        unit_entity = resolve_unit_choice(file, wm.rate_analysis_unit, wm.rate_analysis_unit_custom)
+        set_unit_basis_entity(file, cv_summary, 1.0, unit_entity)
 
         # Restructure: move sub_cvs from CostValues into summary.Components
         cv_summary.Components = sub_cvs
@@ -1057,12 +1161,7 @@ class CV_OT_ApplyFixed(*_IfcOperatorBase):
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
         _remove_analysis_values(tool, cost_item)
 
-        if wm.cost_value_fixed_unit == 'USERDEFINED':
-            unit = wm.cost_value_fixed_unit_custom
-        elif wm.cost_value_fixed_unit == 'NONE':
-            unit = ""
-        else:
-            unit = wm.cost_value_fixed_unit
+        unit_entity = resolve_unit_choice(file, wm.cost_value_fixed_unit, wm.cost_value_fixed_unit_custom)
 
         for comp in wm.cost_value_fixed_components:
             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
@@ -1071,8 +1170,8 @@ class CV_OT_ApplyFixed(*_IfcOperatorBase):
                 "Category": _TO_IFC.get(comp.category),
                 "AppliedValue": round(comp.unit_price, 2),
             })
-            if unit:
-                set_unit_basis(file, cv, 1.0, unit)
+            if unit_entity is not None:
+                set_unit_basis_entity(file, cv, 1.0, unit_entity)
             if comp.source_ifc_id:
                 cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
 
@@ -1346,9 +1445,9 @@ class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
         file = tool.Ifc.get()
         wm = context.window_manager
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
-        unit_str = wm.rate_analysis_unit or ""
+        unit_entity = resolve_unit_choice(file, wm.rate_analysis_unit, wm.rate_analysis_unit_custom)
 
-        ifc_class, value_attr = ifc_quantity_type(unit_str)
+        ifc_class, value_attr = ifc_quantity_type_from_unit(unit_entity)
         qty_entity = file.create_entity(ifc_class, **{
             "Name": "Da misurare",
             value_attr: 0.0,

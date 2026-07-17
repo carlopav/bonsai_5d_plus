@@ -20,10 +20,26 @@ class _Measure:
         self.wrappedValue = value
 
 
+class _MockUnit:
+    """Minimal stand-in for an IfcNamedUnit entity (IfcSIUnit etc)."""
+
+    def __init__(self, unit_id, unit_type="AREAUNIT", name="SQUARE_METRE", ifc_class="IfcSIUnit"):
+        self._id = unit_id
+        self.UnitType = unit_type
+        self.Name = name
+        self._ifc_class = ifc_class
+
+    def id(self):
+        return self._id
+
+    def is_a(self, cls=None):
+        return self._ifc_class if cls is None else cls == self._ifc_class
+
+
 class _UnitBasis:
-    def __init__(self, unit_str):
+    def __init__(self, unit_entity):
         self.ValueComponent = _Measure(1.0)
-        self.UnitComponent = unit_str
+        self.UnitComponent = unit_entity
 
 
 class _MockCostValue:
@@ -70,7 +86,7 @@ class _MockFile:
 class _Collection(list):
     def add(self):
         row = types.SimpleNamespace(
-            category="LABOR", description="", unit="", qty=1.0, unit_price=0.0,
+            category="LABOR", description="", unit='NONE', unit_custom="", qty=1.0, unit_price=0.0,
             source_ifc_id=0, source_identification="", needs_rate_update=False,
         )
         self.append(row)
@@ -87,7 +103,8 @@ def _make_wm():
         rate_analysis_overhead_pct=0.0,
         rate_analysis_profit_pct=0.0,
         rate_analysis_rounding=0.0,
-        rate_analysis_unit="",
+        rate_analysis_unit='NONE',
+        rate_analysis_unit_custom="",
         cost_value_fixed_components=_Collection(),
         cost_value_fixed_active_index=0,
         cost_value_fixed_unit='NONE',
@@ -123,9 +140,6 @@ def _load(item, monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "bonsai.tool", bonsai_tool_mod)
     monkeypatch.setattr(op, "_read_cost_item_info", lambda ctx: None)
     monkeypatch.setattr(op, "_load_quantities", lambda ctx, item: None)
-    # ifc_unit_to_str normally resolves a real IfcSIUnit entity; our mock
-    # UnitBasis.UnitComponent is already the plain unit string.
-    monkeypatch.setattr(op, "ifc_unit_to_str", lambda u: u)
 
     wm = _make_wm()
     context = types.SimpleNamespace(window_manager=wm)
@@ -133,10 +147,14 @@ def _load(item, monkeypatch):
     return found, wm
 
 
+UNIT_MQ = _MockUnit(501, unit_type="AREAUNIT", name="SQUARE_METRE")
+UNIT_H = _MockUnit(502, unit_type="TIMEUNIT", name="HOUR", ifc_class="IfcConversionBasedUnit")
+
+
 def test_fixed_mode_loads_all_rows_with_consistent_unit(monkeypatch):
     item = _MockCostItem(1, [
-        _MockCostValue(None, 50.0, unit="mq"),
-        _MockCostValue("Labor", 20.0, unit="mq"),
+        _MockCostValue(None, 50.0, unit=UNIT_MQ),
+        _MockCostValue("Labor", 20.0, unit=UNIT_MQ),
     ])
     found, wm = _load(item, monkeypatch)
 
@@ -147,14 +165,14 @@ def test_fixed_mode_loads_all_rows_with_consistent_unit(monkeypatch):
     assert wm.cost_value_fixed_components[0].unit_price == 50.0
     assert wm.cost_value_fixed_components[1].category == 'LABOR'
     assert wm.cost_value_fixed_components[1].unit_price == 20.0
-    assert wm.cost_value_fixed_unit == 'mq'
+    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
     assert wm.cost_value_fixed_unit_mixed is False
 
 
 def test_fixed_mode_flags_mixed_units_instead_of_silently_dropping_one(monkeypatch):
     item = _MockCostItem(2, [
-        _MockCostValue(None, 50.0, unit="mq"),
-        _MockCostValue("Labor", 20.0, unit="h"),  # different unit — used to be silently lost
+        _MockCostValue(None, 50.0, unit=UNIT_MQ),
+        _MockCostValue("Labor", 20.0, unit=UNIT_H),  # different unit — used to be silently lost
     ])
     found, wm = _load(item, monkeypatch)
 
@@ -164,14 +182,14 @@ def test_fixed_mode_flags_mixed_units_instead_of_silently_dropping_one(monkeypat
     assert wm.cost_value_fixed_components[0].unit_price == 50.0
     assert wm.cost_value_fixed_components[1].unit_price == 20.0
     # The first unit encountered still wins as the shared display unit...
-    assert wm.cost_value_fixed_unit == 'mq'
+    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
     # ...but the mismatch is now flagged instead of silently swallowed.
     assert wm.cost_value_fixed_unit_mixed is True
 
 
 def test_fixed_mode_single_unit_is_not_flagged_as_mixed(monkeypatch):
-    item = _MockCostItem(3, [_MockCostValue(None, 50.0, unit="mq")])
+    item = _MockCostItem(3, [_MockCostValue(None, 50.0, unit=UNIT_MQ)])
     _, wm = _load(item, monkeypatch)
 
     assert wm.cost_value_fixed_unit_mixed is False
-    assert wm.cost_value_fixed_unit == 'mq'
+    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())

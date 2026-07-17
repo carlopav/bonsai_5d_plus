@@ -203,6 +203,95 @@ def set_unit_basis(file, cv, qty, unit_str):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Unit picker helpers — IFC-native unit choice, used by cost_item_editor's
+# Fixed and Rate Analysis unit dropdowns (as opposed to the abbreviation-
+# string helpers above, which stay in use for the XPWE/rate-list importers).
+# ---------------------------------------------------------------------------
+
+# UnitType values relevant to a cost item's unit of measure — mirrors Bonsai's
+# own tool.Cost.get_units() allowlist (excludes monetary/plane-angle/etc).
+_UNIT_PICKER_TYPES = {"AREAUNIT", "LENGTHUNIT", "TIMEUNIT", "VOLUMEUNIT", "MASSUNIT", "USERDEFINED"}
+
+
+def project_unit_entities(file):
+    """Unit entities declared in IfcProject.UnitsInContext.Units, restricted
+    to the types relevant to a cost item's unit of measure."""
+    projects = file.by_type("IfcProject")
+    if not projects:
+        return []
+    assignment = projects[0].UnitsInContext
+    if assignment is None:
+        return []
+    return [u for u in (assignment.Units or []) if u.is_a("IfcNamedUnit") and u.UnitType in _UNIT_PICKER_TYPES]
+
+
+def resolve_unit_choice(file, enum_value, custom_str=""):
+    """Resolve a unit picker's enum value ('NONE' / 'USERDEFINED' / a unit
+    entity's step-id as a string) to an IFC unit entity, or None.
+
+    The 'USERDEFINED' case reuses get_or_create_unit_entity so a custom
+    string still resolves to (and reuses) a real project unit entity rather
+    than creating duplicates.
+    """
+    if not enum_value or enum_value == "NONE":
+        return None
+    if enum_value == "USERDEFINED":
+        text = (custom_str or "").strip()
+        return get_or_create_unit_entity(file, text) if text else None
+    try:
+        return file.by_id(int(enum_value))
+    except Exception:
+        return None
+
+
+def set_unit_basis_entity(file, cv, qty, unit_entity):
+    """Set cv.UnitBasis = IfcMeasureWithUnit(qty, unit_entity) from an
+    already-resolved unit entity — no abbreviation-string round trip.
+
+    Writes UnitBasis even when qty is 0 (e.g. a Rate Analysis component not
+    yet measured) as long as a unit was actually chosen — the unit of
+    measure is meaningful on its own and downstream readers (the BoQ
+    PDF/ODS "Unit" column) key off UnitBasis regardless of the quantity
+    value. When unit_entity is None, falls back to the same dimensionless
+    "1" placeholder unit that set_unit_basis() uses, so a quantity
+    multiplier is still recorded — but only when qty is non-zero, since
+    there is nothing meaningful to record with neither a unit nor a qty.
+    Returns True on success.
+    """
+    if unit_entity is None and not qty:
+        return False
+    try:
+        if unit_entity is None:
+            unit_entity = get_or_create_unit_entity(file, "1")
+        wrapped_qty = file.create_entity("IfcNumericMeasure", qty or 0.0)
+        cv.UnitBasis = file.create_entity(
+            "IfcMeasureWithUnit",
+            ValueComponent=wrapped_qty,
+            UnitComponent=unit_entity,
+        )
+        return True
+    except Exception:
+        return False
+
+
+_UNIT_TYPE_TO_QUANTITY = {
+    "AREAUNIT":   ("IfcQuantityArea",   "AreaValue"),
+    "VOLUMEUNIT": ("IfcQuantityVolume", "VolumeValue"),
+    "LENGTHUNIT": ("IfcQuantityLength", "LengthValue"),
+    "MASSUNIT":   ("IfcQuantityWeight", "WeightValue"),
+    "TIMEUNIT":   ("IfcQuantityTime",   "TimeValue"),
+}
+
+
+def ifc_quantity_type_from_unit(unit_entity):
+    """Map a resolved IFC unit entity to (IfcClass, value_attribute) for
+    IfcCostItem.CostQuantities, using its UnitType directly — no abbreviation
+    lookup needed since we already hold the real entity."""
+    unit_type = getattr(unit_entity, "UnitType", None) if unit_entity is not None else None
+    return _UNIT_TYPE_TO_QUANTITY.get(unit_type, ("IfcQuantityCount", "CountValue"))
+
+
 def _ifc_str(s):
     """Strip whitespace; return None if empty (IfcLabel must be non-empty)."""
     s = (s or "").strip()

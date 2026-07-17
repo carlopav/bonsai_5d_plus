@@ -4,7 +4,7 @@
 # This file is part of Bonsai5D+.  GNU GPL v3 or later.
 
 import bpy
-from .operator import COMPONENT_CATEGORIES, FIXED_UNIT_ITEMS
+from .operator import COMPONENT_CATEGORIES, _unit_enum_items
 from ...tool.cost import QTY_TYPE_INFO
 
 _QTY_ENUM_ITEMS = [(k, v['label'], v['label']) for k, v in QTY_TYPE_INFO.items()]
@@ -18,7 +18,12 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
         options={'SKIP_SAVE'},
     )
     description: bpy.props.StringProperty(name="Description", options={'SKIP_SAVE'})
-    unit: bpy.props.StringProperty(name="Unit", options={'SKIP_SAVE'})
+    unit: bpy.props.EnumProperty(name="Unit", items=_unit_enum_items, options={'SKIP_SAVE'})
+    unit_custom: bpy.props.StringProperty(
+        name="Custom Unit",
+        description="Custom unit string, used when Unit is set to Custom…",
+        options={'SKIP_SAVE'},
+    )
     qty: bpy.props.FloatProperty(name="Qty", min=0.0, precision=3, default=1.0, options={'SKIP_SAVE'})
     unit_price: bpy.props.FloatProperty(name="Unit Price", min=0.0, precision=2, default=0.0, options={'SKIP_SAVE'})
     source_ifc_id: bpy.props.IntProperty(
@@ -74,9 +79,14 @@ def register():
         description="Rounding adjustment (positive or negative) added to the final price",
         default=0.0, precision=2,
     )
-    bpy.types.WindowManager.rate_analysis_unit = bpy.props.StringProperty(
+    bpy.types.WindowManager.rate_analysis_unit = bpy.props.EnumProperty(
         name="Unit of Measure",
-        description="Unit of measure for the finished work (e.g. mq, mc, m, cad)",
+        description="Unit of measure for the finished work",
+        items=_unit_enum_items,
+    )
+    bpy.types.WindowManager.rate_analysis_unit_custom = bpy.props.StringProperty(
+        name="Custom Unit",
+        description="Custom unit string, used when Unit of Measure is set to Custom…",
         default="",
     )
     bpy.types.WindowManager.rate_analysis_item_identification = bpy.props.StringProperty(
@@ -133,8 +143,7 @@ def register():
     bpy.types.WindowManager.cost_value_fixed_unit = bpy.props.EnumProperty(
         name="Unit",
         description="Unit of measure shared by all fixed cost values on this item",
-        items=FIXED_UNIT_ITEMS,
-        default='NONE',
+        items=_unit_enum_items,
     )
     bpy.types.WindowManager.cost_value_fixed_unit_custom = bpy.props.StringProperty(
         name="Custom Unit",
@@ -163,6 +172,7 @@ def unregister():
     del bpy.types.WindowManager.rate_analysis_profit_pct
     del bpy.types.WindowManager.rate_analysis_rounding
     del bpy.types.WindowManager.rate_analysis_unit
+    del bpy.types.WindowManager.rate_analysis_unit_custom
     del bpy.types.WindowManager.rate_analysis_item_identification
     del bpy.types.WindowManager.rate_analysis_item_name
     del bpy.types.WindowManager.rate_analysis_item_description
