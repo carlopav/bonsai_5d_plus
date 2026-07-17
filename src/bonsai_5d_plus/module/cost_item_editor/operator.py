@@ -1487,11 +1487,29 @@ class QTY_OT_AddRow(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class QTY_OT_RemoveRow(_WMListRemove):
+class QTY_OT_RemoveRow(bpy.types.Operator):
+    """Remove the checked measurement rows, or just the active row if none
+    are checked — mirrors Copy Rows' selection-checkbox behaviour."""
     bl_idname = "cost_quantities.remove_row"
     bl_label = "Remove Measurement Row"
-    _collection_attr = "cost_quantities"
-    _index_attr      = "cost_quantities_active_index"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.window_manager.cost_quantities) > 0
+
+    def execute(self, context):
+        wm = context.window_manager
+        items = wm.cost_quantities
+        indices = [i for i, r in enumerate(items) if r.is_selected]
+        if not indices:
+            idx = wm.cost_quantities_active_index
+            if 0 <= idx < len(items):
+                indices = [idx]
+        for i in sorted(indices, reverse=True):
+            items.remove(i)
+        wm.cost_quantities_active_index = max(0, min(wm.cost_quantities_active_index, len(items) - 1))
+        return {'FINISHED'}
 
 
 class QTY_OT_MoveRowUp(_WMListMoveUp):
