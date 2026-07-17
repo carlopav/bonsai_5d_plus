@@ -75,10 +75,11 @@ def _invalidate_custom_units_cache():
 
 
 def _custom_units_in_use(file):
-    """Unit entities already referenced by some IfcCostValue.UnitBasis
-    anywhere in the file — offered in the unit picker so a custom unit typed
-    once (e.g. "a corpo") can be reused on other items instead of retyped
-    (and duplicated as a near-identical entity)."""
+    """Unit entities already referenced by some IfcCostValue.UnitBasis or
+    IfcPhysicalSimpleQuantity.Unit anywhere in the file — offered in the unit
+    picker so a custom unit typed once (e.g. "a corpo") can be reused on
+    other items instead of retyped (and duplicated as a near-identical
+    entity)."""
     global _custom_units_cache
     now = _time.monotonic()
     if _custom_units_cache["file"] is file and now - _custom_units_cache["time"] < _CUSTOM_UNITS_CACHE_TTL:
@@ -88,6 +89,11 @@ def _custom_units_in_use(file):
     for cv in file.by_type("IfcCostValue"):
         ub = getattr(cv, "UnitBasis", None)
         unit = getattr(ub, "UnitComponent", None) if ub is not None else None
+        if unit is not None and unit.id() not in seen_ids:
+            seen_ids.add(unit.id())
+            found.append(unit)
+    for q in file.by_type("IfcPhysicalSimpleQuantity"):
+        unit = getattr(q, "Unit", None)
         if unit is not None and unit.id() not in seen_ids:
             seen_ids.add(unit.id())
             found.append(unit)
@@ -175,9 +181,7 @@ def _detect_component_category(rate_item):
 # Quantity (libretto delle misure) — derived from tool.cost.QTY_TYPE_INFO
 # ---------------------------------------------------------------------------
 
-_QTY_IFC_CLASS  = {k: v['ifc_class']  for k, v in QTY_TYPE_INFO.items()}
 _QTY_VALUE_ATTR = {k: v['value_attr'] for k, v in QTY_TYPE_INFO.items()}
-_QTY_UNIT_ABBR  = {k: v['abbr']       for k, v in QTY_TYPE_INFO.items()}
 _QTY_FROM_IFC   = QTY_FROM_IFC_CLASS
 
 _OVERHEAD_CAT = "Overhead"
@@ -334,6 +338,17 @@ def _unit_enum_value_for(unit_entity):
     return str(unit_entity.id())
 
 
+def _active_item_unit_choice(wm):
+    """Unit-picker enum choice governing this item's unit of measure — the
+    same one already used for CostValue.UnitBasis in the active cost value
+    mode. Quantities (libretto delle misure) piggyback on it so a cost item
+    has a single unit of measure, not one for price and a different implicit
+    one for quantities."""
+    if wm.cost_value_mode == 'FIXED':
+        return wm.cost_value_fixed_unit, wm.cost_value_fixed_unit_custom
+    return wm.rate_analysis_unit, wm.rate_analysis_unit_custom
+
+
 def _pct_label(label, pct):
     return f"{label} {pct:.1f}%"
 
@@ -481,8 +496,21 @@ def _load_quantities(context, cost_item=None):
                 )
         except Exception:
             return
-    type_detected = False
-    for q in (cost_item.CostQuantities or []):
+
+    quantities = cost_item.CostQuantities or []
+    if quantities:
+        # Quantities may come from a source with its own unit of measure
+        # (import, takeoff, a previous file) — trust what's actually stored
+        # over whatever the price panel currently shows. Legacy quantities
+        # with no .Unit reset the picker to NONE rather than guess.
+        wm.cost_quantities_unit = _unit_enum_value_for(getattr(quantities[0], "Unit", None))
+        wm.cost_quantities_unit_custom = ""
+    else:
+        # No quantities yet — prefill from the item's price unit as a
+        # starting suggestion; the user can still change it freely.
+        wm.cost_quantities_unit, wm.cost_quantities_unit_custom = _active_item_unit_choice(wm)
+
+    for q in quantities:
         row = wm.cost_quantities.add()
         # "Unnamed" is the blank-name sentinel written on apply; show it empty.
         _qname = q.Name or ""
@@ -490,9 +518,6 @@ def _load_quantities(context, cost_item=None):
         row.ifc_id = q.id()
         ifc_type = q.is_a()
         type_id = _QTY_FROM_IFC.get(ifc_type, 'COUNT')
-        if not type_detected:
-            wm.cost_quantities_type = type_id
-            type_detected = True
         val_attr = _QTY_VALUE_ATTR.get(type_id, "CountValue")
         stored_value = float(getattr(q, val_attr, 0.0) or 0.0)
         # Formula is the correct IFC4 attribute; fall back to Description for files
@@ -1446,7 +1471,7 @@ class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
     bl_idname = "rate_analysis.add_zero_quantity"
     bl_label = "Add Zero Quantity"
     bl_description = (
-        "Add a quantity = 0 using the rate analysis unit of measure. "
+        "Add a quantity = 0 using the quantities' unit of measure. "
         "Prevents the item from contributing to the parent SUM total until measured."
     )
     bl_options = {'REGISTER', 'UNDO'}
@@ -1461,13 +1486,13 @@ class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
         file = tool.Ifc.get()
         wm = context.window_manager
         cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
-        unit_entity = resolve_unit_choice(file, wm.rate_analysis_unit, wm.rate_analysis_unit_custom)
+        unit_entity = resolve_unit_choice(file, wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
 
         ifc_class, value_attr = ifc_quantity_type_from_unit(unit_entity)
-        qty_entity = file.create_entity(ifc_class, **{
-            "Name": "Da misurare",
-            value_attr: 0.0,
-        })
+        kw = {"Name": "Da misurare", value_attr: 0.0}
+        if unit_entity is not None:
+            kw["Unit"] = unit_entity
+        qty_entity = file.create_entity(ifc_class, **kw)
         cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty_entity]
 
         _load_quantities(context, cost_item)
@@ -1653,8 +1678,8 @@ class QTY_OT_Apply(*_IfcOperatorBase):
         for q in list(cost_item.CostQuantities or []):
             file.remove(q)
 
-        ifc_class = _QTY_IFC_CLASS[wm.cost_quantities_type]
-        val_attr = _QTY_VALUE_ATTR[wm.cost_quantities_type]
+        unit_entity = resolve_unit_choice(file, wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
+        ifc_class, val_attr = ifc_quantity_type_from_unit(unit_entity)
         new_quantities = []
         for row in wm.cost_quantities:
             partial = _compute_partial_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
@@ -1666,6 +1691,8 @@ class QTY_OT_Apply(*_IfcOperatorBase):
                 "Name": row.qty_desc or "Unnamed",
                 val_attr: round(partial, 6),
             }
+            if unit_entity is not None:
+                kw["Unit"] = unit_entity
             formula = _build_formula_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
             if formula:
                 kw["Formula"] = formula

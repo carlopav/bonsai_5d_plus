@@ -5,9 +5,6 @@
 
 import bpy
 from .operator import COMPONENT_CATEGORIES, _unit_enum_items
-from ...tool.cost import QTY_TYPE_INFO
-
-_QTY_ENUM_ITEMS = [(k, v['label'], v['label']) for k, v in QTY_TYPE_INFO.items()]
 
 
 class RateAnalysisComponent(bpy.types.PropertyGroup):
@@ -158,10 +155,19 @@ def register():
     )
     bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
     bpy.types.WindowManager.cost_quantities_active_index = bpy.props.IntProperty(default=0)
-    bpy.types.WindowManager.cost_quantities_type = bpy.props.EnumProperty(
-        name="Quantity Type",
-        items=_QTY_ENUM_ITEMS,
-        default='COUNT',
+    bpy.types.WindowManager.cost_quantities_unit = bpy.props.EnumProperty(
+        name="Unit",
+        description=(
+            "Unit of measure for this item's quantities. Independent of the price's "
+            "unit — quantities may come from a source (import, takeoff, a previous file) "
+            "with their own unit of measure"
+        ),
+        items=_unit_enum_items,
+    )
+    bpy.types.WindowManager.cost_quantities_unit_custom = bpy.props.StringProperty(
+        name="Custom Unit",
+        description="Custom unit string, used when Unit is set to Custom…",
+        default="",
     )
 
 
@@ -189,4 +195,5 @@ def unregister():
     del bpy.types.WindowManager.cost_value_fixed_unit_mixed
     del bpy.types.WindowManager.cost_quantities
     del bpy.types.WindowManager.cost_quantities_active_index
-    del bpy.types.WindowManager.cost_quantities_type
+    del bpy.types.WindowManager.cost_quantities_unit
+    del bpy.types.WindowManager.cost_quantities_unit_custom

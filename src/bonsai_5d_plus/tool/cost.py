@@ -927,6 +927,10 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
 
                 unit = rate.get("unit", "")
                 ifc_class, value_attr = ifc_quantity_type(unit)
+                # Stamp the resolved unit entity on each quantity so it stays
+                # self-describing regardless of the project's own units (mirrors
+                # CostValue.UnitBasis, see set_unit_basis_entity above).
+                unit_entity = get_or_create_unit_entity(file, unit) if unit.strip() else None
                 rg_items = rate.get("rg_items") or []
                 if import_measurement_rows and rg_items:
                     new_qtys = []
@@ -939,6 +943,8 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                             "Name": rg["desc"] or "Qty",
                             value_attr: round(rg["qty"], 4),
                         }
+                        if unit_entity is not None:
+                            kw["Unit"] = unit_entity
                         if rg.get("formula"):
                             kw["Formula"] = rg["formula"]
                         new_qtys.append(file.create_entity(ifc_class, **kw))
@@ -946,16 +952,22 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                         cost_item.CostQuantities = list(cost_item.CostQuantities or []) + new_qtys
                     elif quantity != 0.0:
                         # All rows were empty placeholders → keep the VCItem total.
-                        qty = file.create_entity(ifc_class, **{
+                        kw = {
                             "Name": rate.get("qty_name") or "Qty",
                             value_attr: round(quantity, 4),
-                        })
+                        }
+                        if unit_entity is not None:
+                            kw["Unit"] = unit_entity
+                        qty = file.create_entity(ifc_class, **kw)
                         cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty]
                 elif quantity != 0.0:
-                    qty = file.create_entity(ifc_class, **{
+                    kw = {
                         "Name": rate.get("qty_name") or "Qty",
                         value_attr: round(quantity, 4),
-                    })
+                    }
+                    if unit_entity is not None:
+                        kw["Unit"] = unit_entity
+                    qty = file.create_entity(ifc_class, **kw)
                     cost_item.CostQuantities = list(cost_item.CostQuantities or []) + [qty]
 
             index_to_ifc[rate["index"]] = cost_item

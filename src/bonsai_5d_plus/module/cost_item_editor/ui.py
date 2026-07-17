@@ -11,7 +11,6 @@ from .operator import (
     _get_cost_schedule,
     _get_rate_value_and_unit,
     _DESCRIPTION_TEXT_NAME,
-    _QTY_UNIT_ABBR,
     _compute_partial_qty,
     _unit_display_label,
 )
@@ -471,7 +470,9 @@ def _draw_quantities(layout, context):
         return
 
     row = layout.row(align=True)
-    row.prop(wm, "cost_quantities_type", text="")
+    row.prop(wm, "cost_quantities_unit", text="")
+    if wm.cost_quantities_unit == 'USERDEFINED':
+        row.prop(wm, "cost_quantities_unit_custom", text="")
     row.separator()
     row.operator("cost_quantities.add_row",       text="", icon="ADD")
     row.operator("cost_quantities.remove_row",    text="", icon="REMOVE")
@@ -508,13 +509,13 @@ def _draw_quantities(layout, context):
         _compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h)
         for r in wm.cost_quantities
     )
-    unit = _QTY_UNIT_ABBR.get(wm.cost_quantities_type, "")
+    unit_label = _unit_display_label(wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
     total_row = layout.split(factor=0.86)
     lbl_col = total_row.row()
     lbl_col.alignment = 'CENTER'
     lbl_col.label(text="Totale:", icon="PROPERTIES")
     val_col = total_row.row()
-    val_col.label(text=f"{total:.2f} {unit}".strip())
+    val_col.label(text=f"{total:.2f} {unit_label}".strip())
 
     layout.separator(factor=0.3)
     row = layout.row(align=True)

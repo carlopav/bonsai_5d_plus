@@ -193,3 +193,32 @@ def test_fixed_mode_single_unit_is_not_flagged_as_mixed(monkeypatch):
 
     assert wm.cost_value_fixed_unit_mixed is False
     assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
+
+
+# ---------------------------------------------------------------------------
+# _active_item_unit_choice — quantities (libretto delle misure) must share
+# the same unit of measure as whichever cost value mode is active, instead
+# of an independently-picked quantity type that could disagree with it.
+# ---------------------------------------------------------------------------
+
+
+def test_active_item_unit_choice_uses_fixed_unit_in_fixed_mode():
+    wm = types.SimpleNamespace(
+        cost_value_mode='FIXED',
+        cost_value_fixed_unit='501',
+        cost_value_fixed_unit_custom="",
+        rate_analysis_unit='NONE',
+        rate_analysis_unit_custom="",
+    )
+    assert op._active_item_unit_choice(wm) == ('501', "")
+
+
+def test_active_item_unit_choice_uses_rate_analysis_unit_otherwise():
+    wm = types.SimpleNamespace(
+        cost_value_mode='RATE_ANALYSIS',
+        cost_value_fixed_unit='NONE',
+        cost_value_fixed_unit_custom="",
+        rate_analysis_unit='USERDEFINED',
+        rate_analysis_unit_custom="cad",
+    )
+    assert op._active_item_unit_choice(wm) == ('USERDEFINED', "cad")
