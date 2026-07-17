@@ -57,27 +57,41 @@ COMPONENT_CATEGORIES = (
 
 _unit_items_cache = []  # prevents GC of the enum item strings (dynamic items)
 
+# Cache for _custom_units_in_use(): a dynamic EnumProperty items callback runs
+# on every redraw (and once per row for Rate Analysis components), so a full
+# file.by_type("IfcCostValue") scan on every call would add up needlessly.
+# Explicitly invalidated (_invalidate_custom_units_cache) right after our own
+# Apply operators write a new UnitBasis, so a just-typed custom unit is
+# immediately offered elsewhere — no rescan needed during normal browsing.
+# The TTL is only a safety net for cost values changed outside our own
+# operators (e.g. Bonsai's native editor); keyed by file identity so
+# switching IFC files can't serve another file's stale results.
+_custom_units_cache = {"file": None, "time": 0.0, "units": []}
+_CUSTOM_UNITS_CACHE_TTL = 10.0  # seconds — safety net only, see above
 
-def _extra_unit_entities(file, wm):
-    """Unit entities used by the currently loaded item's cost values that
-    aren't necessarily in the project's declared units (e.g. legacy entities
-    created by get_or_create_unit_entity before this picker existed)."""
-    target_id = getattr(wm, "rate_analysis_target_ifc_id", 0)
-    if not target_id:
-        return []
-    try:
-        item = file.by_id(target_id)
-    except Exception:
-        return []
-    found = []
+
+def _invalidate_custom_units_cache():
+    _custom_units_cache["time"] = 0.0
+
+
+def _custom_units_in_use(file):
+    """Unit entities already referenced by some IfcCostValue.UnitBasis
+    anywhere in the file — offered in the unit picker so a custom unit typed
+    once (e.g. "a corpo") can be reused on other items instead of retyped
+    (and duplicated as a near-identical entity)."""
+    global _custom_units_cache
+    now = _time.monotonic()
+    if _custom_units_cache["file"] is file and now - _custom_units_cache["time"] < _CUSTOM_UNITS_CACHE_TTL:
+        return _custom_units_cache["units"]
     seen_ids = set()
-    for cv in (item.CostValues or []):
-        for sub_cv in [cv] + list(getattr(cv, "Components", None) or []):
-            ub = getattr(sub_cv, "UnitBasis", None)
-            unit = getattr(ub, "UnitComponent", None) if ub is not None else None
-            if unit is not None and unit.id() not in seen_ids:
-                seen_ids.add(unit.id())
-                found.append(unit)
+    found = []
+    for cv in file.by_type("IfcCostValue"):
+        ub = getattr(cv, "UnitBasis", None)
+        unit = getattr(ub, "UnitComponent", None) if ub is not None else None
+        if unit is not None and unit.id() not in seen_ids:
+            seen_ids.add(unit.id())
+            found.append(unit)
+    _custom_units_cache = {"file": file, "time": now, "units": found}
     return found
 
 
@@ -92,7 +106,7 @@ def _unit_enum_items(self, context):
             for unit in project_unit_entities(file):
                 items.append((str(unit.id()), tool.Cost.format_unit(unit), ""))
                 seen_ids.add(unit.id())
-            for unit in _extra_unit_entities(file, context.window_manager):
+            for unit in _custom_units_in_use(file):
                 if unit.id() not in seen_ids:
                     label = f"{tool.Cost.format_unit(unit)}  (not in project units)"
                     items.append((str(unit.id()), label, ""))
@@ -1082,6 +1096,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         })
         unit_entity = resolve_unit_choice(file, wm.rate_analysis_unit, wm.rate_analysis_unit_custom)
         set_unit_basis_entity(file, cv_summary, 1.0, unit_entity)
+        _invalidate_custom_units_cache()
 
         # Restructure: move sub_cvs from CostValues into summary.Components
         cv_summary.Components = sub_cvs
@@ -1174,6 +1189,7 @@ class CV_OT_ApplyFixed(*_IfcOperatorBase):
                 set_unit_basis_entity(file, cv, 1.0, unit_entity)
             if comp.source_ifc_id:
                 cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
+        _invalidate_custom_units_cache()
 
         resync_rate_values(tool, cost_item)
         refresh_cost_ui(tool)

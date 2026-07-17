@@ -14,7 +14,7 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
     category: bpy.props.EnumProperty(
         name="Category",
         items=COMPONENT_CATEGORIES,
-        default='LABOR',
+        default='NONE',
         options={'SKIP_SAVE'},
     )
     description: bpy.props.StringProperty(name="Description", options={'SKIP_SAVE'})
