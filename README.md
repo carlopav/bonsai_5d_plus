@@ -98,6 +98,17 @@ Raccoglie gli strumenti di manutenzione massiva sul Cost Schedule attivo, in un 
 
 ---
 
+## ⚠️ Unità di misura — stato e limiti noti
+
+Bonsai5D+ tratta l'unità di misura come **entità IFC esplicita** (`IfcSIUnit` / `IfcConversionBasedUnit` / `IfcContextDependentUnit`), non come una stringa o un'abbreviazione a parte, sia per il prezzo che per la quantità:
+
+- **Prezzo** (`IfcCostValue.UnitBasis`) e **quantità** (`IfcPhysicalSimpleQuantity.Unit`, dalla **v0.0.15**) portano entrambi l'unità direttamente sull'entità, invece di dipendere implicitamente dall'unità di progetto (`IfcProject.UnitsInContext`) come fallback silenzioso. Prima della v0.0.15 questo fallback poteva **reinterpretare silenziosamente una quantità nell'unità sbagliata** (es. voce di prezzario misurata in metri, progetto in millimetri → valore letto ×1000 errato), senza alcun avviso a video.
+- Nel Cost Item Editor i due picker — unità del **prezzo** (Fixed/Rate Analysis) e unità delle **Quantities** (libretto delle misure) — sono **volutamente indipendenti**: le quantità possono arrivare da una fonte diversa dal prezzo (import da prezzario, take-off geometrico, file precedenti) e non vengono mai forzate a coincidere. Al caricamento il picker delle Quantities riflette l'unità realmente salvata su ogni quantità; solo per un item senza quantità propone quella del prezzo come suggerimento iniziale.
+- **Not battle tested**: introdotto nella sessione del 2026-07-17. Copre quantità legacy senza `.Unit` salvate da versioni precedenti dell'addon, cost item con sole quantità e nessun cost value, ed export BoQ con unità di prezzo e quantità divergenti, ma manca ancora l'uso prolungato su dati reali.
+- **Limite noto, non ancora risolto**: nessuna **conversione di fattore** tra unità diverse (es. prezzario in dm², progetto IFC in m²). Il prezzo deve già essere espresso nell'unità corretta al momento dell'assegnazione della tariffa; l'addon non applica alcun fattore di conversione automatico.
+
+---
+
 ## Installazione
 
 ### Da GitHub Releases
@@ -190,5 +201,14 @@ blender.exe --background --python tools/generate_classifications.py
   - *Bulk Update from Rate List*: batch-updates unit prices in the active Cost Schedule from the loaded price list, with a preview before applying.
   - *Reorder Cost Schedule*: renumbers every item's `Identification` hierarchically (1, 1.1, 1.1.1, 1.2, 2, …) — "Reorder All" resets the whole structure, "Keep Levels Above" renumbers from a chosen level down, leaving higher levels untouched and continuing existing numeric identifications rather than resetting them.
   - *Rate Sync*: schedule-wide tools for the shared-rate linking described above — "Audit schedule" reports how many rate-linked items are out of sync; "Resync all" realigns every out-of-sync item in the active schedule with its controlling rate.
+
+### ⚠️ Units of measure — status and known limits
+
+Bonsai5D+ treats the unit of measure as an **explicit IFC entity** (`IfcSIUnit` / `IfcConversionBasedUnit` / `IfcContextDependentUnit`), not a string or abbreviation on the side, for both price and quantity:
+
+- **Price** (`IfcCostValue.UnitBasis`) and **quantity** (`IfcPhysicalSimpleQuantity.Unit`, since **v0.0.15**) both carry the unit directly on the entity, instead of implicitly depending on the project's unit (`IfcProject.UnitsInContext`) as a silent fallback. Before v0.0.15 that fallback could **silently reinterpret a quantity in the wrong unit** (e.g. a price-list item measured in metres, project in millimetres → value read out ×1000 wrong), with no warning shown.
+- In the Cost Item Editor, the **price** unit picker (Fixed/Rate Analysis) and the **Quantities** unit picker (measurement book) are **deliberately independent**: quantities may come from a different source than the price (price-list import, geometric takeoff, a previous file) and are never forced to match. On load, the Quantities picker reflects whatever unit is actually stored on the item's quantities; it only suggests the price's unit as a starting point for an item with no quantities yet.
+- **Not battle tested**: introduced in the 2026-07-17 session. Covers legacy quantities with no `.Unit` written by older addon versions, cost items with quantities but no cost value, and BoQ export with diverging price/quantity units, but still lacks extended use against real-world data.
+- **Known, unresolved limitation**: no **conversion factor** between different units (e.g. a price list in dm², IFC project in m²). The price must already be expressed in the correct unit when the rate is assigned; the addon applies no automatic conversion factor.
 
 **Requirements:** Blender 4.0+ and a recent Bonsai BIM **daily/alpha build from 2026-06-17 onward** (`alpha260617+`). PDF export of the bill of quantities relies on the `ifc5d` fixes merged into ifcopenshell on 2026-06-16 ([#8175](https://github.com/IfcOpenShell/IfcOpenShell/pull/8175) escape quantity names, [#8176](https://github.com/IfcOpenShell/IfcOpenShell/pull/8176) include the quantity formula); with older builds the BoQ print fails with a JSON parsing error.
