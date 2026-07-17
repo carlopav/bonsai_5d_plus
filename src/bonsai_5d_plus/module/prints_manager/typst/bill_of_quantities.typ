@@ -189,7 +189,8 @@
     let description = if options.at("should_print_description") == true and row.at("Description") != "" {
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
-    let unit = table.cell(align: right)[Sum #fmt-unit(row.at("Unit", default: ""))]
+    let unit_str = fmt-unit(row.at("Unit", default: ""))
+    let unit = table.cell(align: right)[#if unit_str != "" { unit_str } else { "-" }]
     let quant_v = if row.at("Quantity") == "" { 0.0 } else { float(row.at("Quantity")) }
     let rate_v = if row.at("RateSubtotal") == "" { 0.0 } else { float(row.at("RateSubtotal")) }
     let total_v = quant_v * rate_v
