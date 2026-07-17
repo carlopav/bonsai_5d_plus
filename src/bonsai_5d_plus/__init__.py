@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Bonsai5D+",
     "author": "carlopav",
-    "version": (0, 0, 14),
+    "version": (0, 0, 15),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Rate List",
     "description": (
