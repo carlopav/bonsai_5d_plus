@@ -53,72 +53,65 @@ class MeasureRow(bpy.types.PropertyGroup):
     is_selected: bpy.props.BoolProperty(name="Selected", default=False, options={'SKIP_SAVE'})
 
 
-classes = [RateAnalysisComponent, MeasureRow]
+class CostItemEditorProps(bpy.types.PropertyGroup):
+    """Draft state of the Cost Item Editor, held on Scene so it is undoable."""
 
-
-def register():
-    bpy.types.WindowManager.rate_analysis_components = bpy.props.CollectionProperty(
-        type=RateAnalysisComponent,
-    )
-    bpy.types.WindowManager.rate_analysis_active_index = bpy.props.IntProperty(default=0)
-    bpy.types.WindowManager.rate_analysis_overhead_pct = bpy.props.FloatProperty(
+    rate_analysis_components: bpy.props.CollectionProperty(type=RateAnalysisComponent)
+    rate_analysis_active_index: bpy.props.IntProperty(default=0)
+    rate_analysis_overhead_pct: bpy.props.FloatProperty(
         name="Overhead %",
         description="Overhead percentage applied to technical cost",
         default=15.0, min=0.0, max=100.0, precision=1,
     )
-    bpy.types.WindowManager.rate_analysis_profit_pct = bpy.props.FloatProperty(
+    rate_analysis_profit_pct: bpy.props.FloatProperty(
         name="Profit %",
         description="Profit margin applied to (technical cost + overhead)",
         default=10.0, min=0.0, max=100.0, precision=1,
     )
-    bpy.types.WindowManager.rate_analysis_rounding = bpy.props.FloatProperty(
+    rate_analysis_rounding: bpy.props.FloatProperty(
         name="Rounding",
         description="Rounding adjustment (positive or negative) added to the final price",
         default=0.0, precision=2,
     )
-    bpy.types.WindowManager.rate_analysis_unit = bpy.props.EnumProperty(
+    rate_analysis_unit: bpy.props.EnumProperty(
         name="Unit of Measure",
         description="Unit of measure for the finished work",
         items=_unit_enum_items,
     )
-    bpy.types.WindowManager.rate_analysis_unit_custom = bpy.props.StringProperty(
+    rate_analysis_unit_custom: bpy.props.StringProperty(
         name="Custom Unit",
         description="Custom unit string, used when Unit of Measure is set to Custom…",
         default="",
     )
-    bpy.types.WindowManager.rate_analysis_item_identification = bpy.props.StringProperty(
+    rate_analysis_item_identification: bpy.props.StringProperty(
         name="Identification", default="",
     )
-    bpy.types.WindowManager.rate_analysis_item_name = bpy.props.StringProperty(
+    rate_analysis_item_name: bpy.props.StringProperty(
         name="Name", default="",
     )
-    bpy.types.WindowManager.rate_analysis_item_description = bpy.props.StringProperty(
+    rate_analysis_item_description: bpy.props.StringProperty(
         name="Description", default="",
     )
-    bpy.types.WindowManager.rate_analysis_target_ifc_id = bpy.props.IntProperty(
+    rate_analysis_target_ifc_id: bpy.props.IntProperty(
         name="Target IFC ID",
         description="IFC step ID of the cost item being analysed (0 = none)",
         default=0,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.rate_analysis_editing_description = bpy.props.BoolProperty(
+    rate_analysis_editing_description: bpy.props.BoolProperty(
         name="Editing Description",
         default=False,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.rate_analysis_drafting = bpy.props.BoolProperty(
+    rate_analysis_drafting: bpy.props.BoolProperty(
         name="Drafting Rate Analysis",
         description="A new rate analysis is being built for the current item, not yet applied to IFC",
         default=False,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.rate_analysis_auto_load = bpy.props.BoolProperty(
+    rate_analysis_auto_load: bpy.props.BoolProperty(
         name="Auto Load",
         description="Automatically reload data when the active cost item changes",
         default=False,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.cost_value_mode = bpy.props.EnumProperty(
+    cost_value_mode: bpy.props.EnumProperty(
         name="Cost Value Mode",
         items=[
             ('SUM', "Sum", "This item sums its children's costs (Category='*')"),
@@ -127,35 +120,31 @@ def register():
         ],
         default='FIXED',
     )
-    bpy.types.WindowManager.cost_value_fixed_components = bpy.props.CollectionProperty(
-        type=RateAnalysisComponent,
-    )
-    bpy.types.WindowManager.cost_value_fixed_active_index = bpy.props.IntProperty(default=0)
-    bpy.types.WindowManager.cost_value_fixed_drafting = bpy.props.BoolProperty(
+    cost_value_fixed_components: bpy.props.CollectionProperty(type=RateAnalysisComponent)
+    cost_value_fixed_active_index: bpy.props.IntProperty(default=0)
+    cost_value_fixed_drafting: bpy.props.BoolProperty(
         name="Drafting Fixed Cost Values",
         description="New fixed cost values are being built for the current item, not yet applied to IFC",
         default=False,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.cost_value_fixed_unit = bpy.props.EnumProperty(
+    cost_value_fixed_unit: bpy.props.EnumProperty(
         name="Unit",
         description="Unit of measure shared by all fixed cost values on this item",
         items=_unit_enum_items,
     )
-    bpy.types.WindowManager.cost_value_fixed_unit_custom = bpy.props.StringProperty(
+    cost_value_fixed_unit_custom: bpy.props.StringProperty(
         name="Custom Unit",
         description="Custom unit string, used when Unit is set to Custom…",
         default="",
     )
-    bpy.types.WindowManager.cost_value_fixed_unit_mixed = bpy.props.BoolProperty(
+    cost_value_fixed_unit_mixed: bpy.props.BoolProperty(
         name="Mixed Units on Load",
         description="The loaded cost values had different units — unified to one on load, review before applying",
         default=False,
-        options={'SKIP_SAVE'},
     )
-    bpy.types.WindowManager.cost_quantities = bpy.props.CollectionProperty(type=MeasureRow)
-    bpy.types.WindowManager.cost_quantities_active_index = bpy.props.IntProperty(default=0)
-    bpy.types.WindowManager.cost_quantities_unit = bpy.props.EnumProperty(
+    cost_quantities: bpy.props.CollectionProperty(type=MeasureRow)
+    cost_quantities_active_index: bpy.props.IntProperty(default=0)
+    cost_quantities_unit: bpy.props.EnumProperty(
         name="Unit",
         description=(
             "Unit of measure for this item's quantities. Independent of the price's "
@@ -164,36 +153,21 @@ def register():
         ),
         items=_unit_enum_items,
     )
-    bpy.types.WindowManager.cost_quantities_unit_custom = bpy.props.StringProperty(
+    cost_quantities_unit_custom: bpy.props.StringProperty(
         name="Custom Unit",
         description="Custom unit string, used when Unit is set to Custom…",
         default="",
     )
 
 
+# RateAnalysisComponent and MeasureRow must be registered before the
+# CostItemEditorProps collections that reference them.
+classes = [RateAnalysisComponent, MeasureRow, CostItemEditorProps]
+
+
+def register():
+    bpy.types.Scene.bonsai5d_cost_editor = bpy.props.PointerProperty(type=CostItemEditorProps)
+
+
 def unregister():
-    del bpy.types.WindowManager.rate_analysis_components
-    del bpy.types.WindowManager.rate_analysis_active_index
-    del bpy.types.WindowManager.rate_analysis_overhead_pct
-    del bpy.types.WindowManager.rate_analysis_profit_pct
-    del bpy.types.WindowManager.rate_analysis_rounding
-    del bpy.types.WindowManager.rate_analysis_unit
-    del bpy.types.WindowManager.rate_analysis_unit_custom
-    del bpy.types.WindowManager.rate_analysis_item_identification
-    del bpy.types.WindowManager.rate_analysis_item_name
-    del bpy.types.WindowManager.rate_analysis_item_description
-    del bpy.types.WindowManager.rate_analysis_target_ifc_id
-    del bpy.types.WindowManager.rate_analysis_editing_description
-    del bpy.types.WindowManager.rate_analysis_drafting
-    del bpy.types.WindowManager.rate_analysis_auto_load
-    del bpy.types.WindowManager.cost_value_mode
-    del bpy.types.WindowManager.cost_value_fixed_components
-    del bpy.types.WindowManager.cost_value_fixed_active_index
-    del bpy.types.WindowManager.cost_value_fixed_drafting
-    del bpy.types.WindowManager.cost_value_fixed_unit
-    del bpy.types.WindowManager.cost_value_fixed_unit_custom
-    del bpy.types.WindowManager.cost_value_fixed_unit_mixed
-    del bpy.types.WindowManager.cost_quantities
-    del bpy.types.WindowManager.cost_quantities_active_index
-    del bpy.types.WindowManager.cost_quantities_unit
-    del bpy.types.WindowManager.cost_quantities_unit_custom
+    del bpy.types.Scene.bonsai5d_cost_editor

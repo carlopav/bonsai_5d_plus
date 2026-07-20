@@ -846,8 +846,8 @@ def _ra_target_item(context):
     ifc = _get_ifc()
     if ifc is None:
         return None, None
-    wm = context.window_manager
-    target_id = getattr(wm, "rate_analysis_target_ifc_id", 0)
+    editor = getattr(context.scene, "bonsai5d_cost_editor", None)
+    target_id = getattr(editor, "rate_analysis_target_ifc_id", 0)
     if target_id:
         return ifc, ifc.by_id(target_id)
     try:

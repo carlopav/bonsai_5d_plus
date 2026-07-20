@@ -31,7 +31,7 @@ def _target_item(context):
     try:
         from bonsai import tool
         file = tool.Ifc.get()
-        tid = getattr(context.window_manager, "rate_analysis_target_ifc_id", 0)
+        tid = getattr(context.scene.bonsai5d_cost_editor, "rate_analysis_target_ifc_id", 0)
         if file and tid:
             return file.by_id(int(tid))
     except Exception:
@@ -121,7 +121,7 @@ class CostItemEditorPanel(bpy.types.Panel):
     bl_category = "Bonsai5D+"
     def draw(self, context):
         layout = self.layout
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
 
         box = layout.box()
 
@@ -157,15 +157,15 @@ class CostItemEditorPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.scale_y = 1.3
         row.operator("rate_analysis.load_from_ifc", text="Load Item Data", icon="FILE_REFRESH")
-        row.prop(wm, "rate_analysis_auto_load", text="", icon="LINKED", toggle=True)
+        row.prop(ed, "rate_analysis_auto_load", text="", icon="LINKED", toggle=True)
 
-        if wm.rate_analysis_target_ifc_id:
+        if ed.rate_analysis_target_ifc_id:
             sched_label = "Cost Schedule: —"
             try:
                 from bonsai import tool
                 file = tool.Ifc.get()
                 if file:
-                    cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+                    cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
                     schedule = _get_cost_schedule(cost_item)
                     if schedule:
                         name = schedule.Name or "—"
@@ -199,14 +199,14 @@ class CostItemEditorPanel(bpy.types.Panel):
 
 
 def _draw_identification(layout, context):
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
-    layout.prop(wm, "rate_analysis_item_identification", text="ID")
-    layout.prop(wm, "rate_analysis_item_name", text="Name")
+    layout.prop(ed, "rate_analysis_item_identification", text="ID")
+    layout.prop(ed, "rate_analysis_item_name", text="Name")
 
-    if not wm.rate_analysis_editing_description:
+    if not ed.rate_analysis_editing_description:
         row = layout.row(align=True)
-        row.prop(wm, "rate_analysis_item_description", text="Description")
+        row.prop(ed, "rate_analysis_item_description", text="Description")
         row.operator("rate_analysis.edit_description", text="", icon="GREASEPENCIL")
     else:
         box = layout.box()
@@ -226,7 +226,7 @@ def _draw_identification(layout, context):
 
 
 def _draw_cost_value(layout, context):
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
     item = _target_item(context)
     ctrl = get_rate_controller(item) if item is not None else None
@@ -261,18 +261,18 @@ def _draw_cost_value(layout, context):
         return
 
     row = layout.row(align=True)
-    row.prop_enum(wm, "cost_value_mode", 'SUM')
-    row.prop_enum(wm, "cost_value_mode", 'FIXED')
-    row.prop_enum(wm, "cost_value_mode", 'RATE_ANALYSIS')
+    row.prop_enum(ed, "cost_value_mode", 'SUM')
+    row.prop_enum(ed, "cost_value_mode", 'FIXED')
+    row.prop_enum(ed, "cost_value_mode", 'RATE_ANALYSIS')
     layout.separator(factor=0.3)
 
     deps = get_rate_dependents(item) if item is not None else []
     if deps:
         layout.label(text=f"Cost value controls {len(deps)} other value(s)", icon="INFO")
 
-    if wm.cost_value_mode == 'SUM':
+    if ed.cost_value_mode == 'SUM':
         _draw_cost_value_sum(layout, context)
-    elif wm.cost_value_mode == 'FIXED':
+    elif ed.cost_value_mode == 'FIXED':
         _draw_cost_value_fixed(layout, context)
     else:
         _draw_rate_analysis(layout, context)
@@ -293,7 +293,7 @@ def _draw_cost_value_sum(layout, context):
 
 
 def _draw_cost_value_fixed(layout, context):
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
     item = _target_item(context)
     if item is not None and get_cost_item_children(item):
@@ -303,7 +303,7 @@ def _draw_cost_value_fixed(layout, context):
 
     is_sum = item is not None and is_summary_cost_item(item)
     is_rate_analysis = item is not None and item.ObjectType == "RATE_ANALYSIS"
-    if (is_sum or is_rate_analysis) and not wm.cost_value_fixed_drafting:
+    if (is_sum or is_rate_analysis) and not ed.cost_value_fixed_drafting:
         layout.operator(
             "cost_value.start_fixed_draft",
             text="Clear cost values and add new fixed cost value",
@@ -320,19 +320,19 @@ def _draw_cost_value_fixed(layout, context):
 
     layout.template_list(
         "FIXED_UL_values", "fixed",
-        wm, "cost_value_fixed_components",
-        wm, "cost_value_fixed_active_index",
+        ed, "cost_value_fixed_components",
+        ed, "cost_value_fixed_active_index",
         rows=5,
     )
 
-    comps = wm.cost_value_fixed_components
+    comps = ed.cost_value_fixed_components
     total = sum(c.unit_price for c in comps)
     row = layout.row(align=True)
     row.label(text=f"Total: {total:.2f}")
-    row.prop(wm, "cost_value_fixed_unit", text="")
-    if wm.cost_value_fixed_unit == 'USERDEFINED':
-        row.prop(wm, "cost_value_fixed_unit_custom", text="")
-    if wm.cost_value_fixed_unit_mixed:
+    row.prop(ed, "cost_value_fixed_unit", text="")
+    if ed.cost_value_fixed_unit == 'USERDEFINED':
+        row.prop(ed, "cost_value_fixed_unit_custom", text="")
+    if ed.cost_value_fixed_unit_mixed:
         layout.label(text="Rows had different units on load — unified above, review before applying.", icon="ERROR")
 
     layout.separator(factor=0.3)
@@ -342,7 +342,7 @@ def _draw_cost_value_fixed(layout, context):
 
 
 def _draw_rate_analysis(layout, context):
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
     item = _target_item(context)
     if item is not None and get_cost_item_children(item):
@@ -351,7 +351,7 @@ def _draw_rate_analysis(layout, context):
         return
 
     is_applied = item is not None and item.ObjectType == "RATE_ANALYSIS"
-    if not is_applied and not wm.rate_analysis_drafting:
+    if not is_applied and not ed.rate_analysis_drafting:
         layout.operator("rate_analysis.start_draft", text="Clear cost values and add rate analysis", icon="ADD")
         return
 
@@ -368,13 +368,13 @@ def _draw_rate_analysis(layout, context):
 
     body.template_list(
         "RATE_UL_analysis", "",
-        wm, "rate_analysis_components",
-        wm, "rate_analysis_active_index",
+        ed, "rate_analysis_components",
+        ed, "rate_analysis_active_index",
         rows=5,
     )
 
-    comps = wm.rate_analysis_components
-    idx = wm.rate_analysis_active_index
+    comps = ed.rate_analysis_components
+    idx = ed.rate_analysis_active_index
     if 0 <= idx < len(comps):
         comp = comps[idx]
         box = body.box()
@@ -400,11 +400,11 @@ def _draw_rate_analysis(layout, context):
             ref_label = comp.source_identification or f"#{comp.source_ifc_id}"
             row.label(text=f"Rate ref: {ref_label}", icon="LINKED")
 
-    ct, sg, profit, final = _get_totals(wm)
+    ct, sg, profit, final = _get_totals(ed)
     box = body.box()
 
     cat_totals = {}
-    for c in wm.rate_analysis_components:
+    for c in ed.rate_analysis_components:
         cat_totals[c.category] = cat_totals.get(c.category, 0.0) + c.qty * c.unit_price
     for cat_id, cat_label, _ in COMPONENT_CATEGORIES:
         total = cat_totals.get(cat_id, 0.0)
@@ -421,22 +421,22 @@ def _draw_rate_analysis(layout, context):
     r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{ct:.2f}")
     box.separator(factor=0.3)
     split = box.split(factor=0.6)
-    split.prop(wm, "rate_analysis_overhead_pct", text="Overhead %")
+    split.prop(ed, "rate_analysis_overhead_pct", text="Overhead %")
     r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{sg:.2f}")
     split = box.split(factor=0.6)
-    split.prop(wm, "rate_analysis_profit_pct", text="Profit %")
+    split.prop(ed, "rate_analysis_profit_pct", text="Profit %")
     r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{profit:.2f}")
     split = box.split(factor=0.6)
-    split.prop(wm, "rate_analysis_rounding", text="Rounding")
+    split.prop(ed, "rate_analysis_rounding", text="Rounding")
     split.label(text="")
 
     box2 = body.box()
     split = box2.split(factor=0.6)
     row_label = split.row(align=True)
     row_label.label(text="FINAL PRICE:", icon="DISC")
-    row_label.prop(wm, "rate_analysis_unit", text="")
-    if wm.rate_analysis_unit == 'USERDEFINED':
-        row_label.prop(wm, "rate_analysis_unit_custom", text="")
+    row_label.prop(ed, "rate_analysis_unit", text="")
+    if ed.rate_analysis_unit == 'USERDEFINED':
+        row_label.prop(ed, "rate_analysis_unit_custom", text="")
     r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{final:.2f}")
 
     layout.separator(factor=0.3)
@@ -470,7 +470,7 @@ class MEAS_UL_rows(bpy.types.UIList):
 
 
 def _draw_quantities(layout, context):
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
     item = _target_item(context)
     if item is not None and get_cost_item_children(item):
@@ -478,9 +478,9 @@ def _draw_quantities(layout, context):
         return
 
     row = layout.row(align=True)
-    row.prop(wm, "cost_quantities_unit", text="")
-    if wm.cost_quantities_unit == 'USERDEFINED':
-        row.prop(wm, "cost_quantities_unit_custom", text="")
+    row.prop(ed, "cost_quantities_unit", text="")
+    if ed.cost_quantities_unit == 'USERDEFINED':
+        row.prop(ed, "cost_quantities_unit_custom", text="")
     row.separator()
     row.operator("cost_quantities.add_row",       text="", icon="ADD")
     row.operator("cost_quantities.remove_row",    text="", icon="REMOVE")
@@ -506,8 +506,8 @@ def _draw_quantities(layout, context):
 
     layout.template_list(
         "MEAS_UL_rows", "",
-        wm, "cost_quantities",
-        wm, "cost_quantities_active_index",
+        ed, "cost_quantities",
+        ed, "cost_quantities_active_index",
         rows=5,
     )
 
@@ -515,9 +515,9 @@ def _draw_quantities(layout, context):
     # Split factor ≈ (spacer+desc+4cols) / total_scale_units: 0.9+2.0+5.6 / 9.9 ≈ 0.86
     total = sum(
         _compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h)
-        for r in wm.cost_quantities
+        for r in ed.cost_quantities
     )
-    unit_label = _unit_display_label(wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
+    unit_label = _unit_display_label(ed.cost_quantities_unit, ed.cost_quantities_unit_custom)
     total_row = layout.split(factor=0.86)
     lbl_col = total_row.row()
     lbl_col.alignment = 'CENTER'

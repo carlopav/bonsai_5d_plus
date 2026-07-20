@@ -34,7 +34,8 @@ def _resolve_item(context, item_id):
     if file is None:
         return None, None
     if not item_id:
-        item_id = getattr(context.window_manager, "rate_analysis_target_ifc_id", 0)
+        editor = getattr(context.scene, "bonsai5d_cost_editor", None)
+        item_id = getattr(editor, "rate_analysis_target_ifc_id", 0)
     if not item_id:
         props = context.scene.BIMCostProperties
         if props.active_cost_item is not None:

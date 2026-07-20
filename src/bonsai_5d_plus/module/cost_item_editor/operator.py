@@ -289,11 +289,11 @@ def _get_rate_current_value(file, source_ifc_id):
     return _get_rate_value_and_unit(file, source_ifc_id)[0]
 
 
-def _get_totals(wm):
-    ct     = sum(round(c.qty * c.unit_price, 2) for c in wm.rate_analysis_components)
-    sg     = round(ct * wm.rate_analysis_overhead_pct / 100.0, 2)
-    profit = round((ct + sg) * wm.rate_analysis_profit_pct / 100.0, 2)
-    final  = ct + sg + profit + wm.rate_analysis_rounding
+def _get_totals(ed):
+    ct     = sum(round(c.qty * c.unit_price, 2) for c in ed.rate_analysis_components)
+    sg     = round(ct * ed.rate_analysis_overhead_pct / 100.0, 2)
+    profit = round((ct + sg) * ed.rate_analysis_profit_pct / 100.0, 2)
+    final  = ct + sg + profit + ed.rate_analysis_rounding
     return ct, sg, profit, final
 
 
@@ -339,15 +339,15 @@ def _unit_enum_value_for(unit_entity):
     return str(unit_entity.id())
 
 
-def _active_item_unit_choice(wm):
+def _active_item_unit_choice(ed):
     """Unit-picker enum choice governing this item's unit of measure — the
     same one already used for CostValue.UnitBasis in the active cost value
     mode. Quantities (libretto delle misure) piggyback on it so a cost item
     has a single unit of measure, not one for price and a different implicit
     one for quantities."""
-    if wm.cost_value_mode == 'FIXED':
-        return wm.cost_value_fixed_unit, wm.cost_value_fixed_unit_custom
-    return wm.rate_analysis_unit, wm.rate_analysis_unit_custom
+    if ed.cost_value_mode == 'FIXED':
+        return ed.cost_value_fixed_unit, ed.cost_value_fixed_unit_custom
+    return ed.rate_analysis_unit, ed.rate_analysis_unit_custom
 
 
 def _pct_label(label, pct):
@@ -389,24 +389,24 @@ def _read_cost_item_info(context):
     try:
         from bonsai import tool
         file = tool.Ifc.get()
-        wm = context.window_manager
-        target_id = wm.rate_analysis_target_ifc_id
+        ed = context.scene.bonsai5d_cost_editor
+        target_id = ed.rate_analysis_target_ifc_id
         if target_id:
             cost_item = file.by_id(target_id)
         else:
             cost_item = file.by_id(context.scene.BIMCostProperties.active_cost_item.ifc_definition_id)
-        wm.rate_analysis_item_identification = cost_item.Identification or ""
-        wm.rate_analysis_item_name = cost_item.Name or ""
-        wm.rate_analysis_item_description = cost_item.Description or ""
+        ed.rate_analysis_item_identification = cost_item.Identification or ""
+        ed.rate_analysis_item_name = cost_item.Name or ""
+        ed.rate_analysis_item_description = cost_item.Description or ""
     except Exception:
         pass
 
 
-def _write_cost_item_info(tool, cost_item, wm):
+def _write_cost_item_info(tool, cost_item, ed):
     tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={
-        "Identification": wm.rate_analysis_item_identification or None,
-        "Name": wm.rate_analysis_item_name or None,
-        "Description": wm.rate_analysis_item_description or None,
+        "Identification": ed.rate_analysis_item_identification or None,
+        "Name": ed.rate_analysis_item_name or None,
+        "Description": ed.rate_analysis_item_description or None,
     })
 
 
@@ -481,14 +481,14 @@ def _deserialize_measure_rows(text):
 
 def _load_quantities(context, cost_item=None):
     """Populate cost_quantities collection from cost_item.CostQuantities."""
-    wm = context.window_manager
-    wm.cost_quantities.clear()
-    wm.cost_quantities_active_index = 0
+    ed = context.scene.bonsai5d_cost_editor
+    ed.cost_quantities.clear()
+    ed.cost_quantities_active_index = 0
     if cost_item is None:
         try:
             from bonsai import tool
             file = tool.Ifc.get()
-            target_id = wm.rate_analysis_target_ifc_id
+            target_id = ed.rate_analysis_target_ifc_id
             if target_id:
                 cost_item = file.by_id(target_id)
             else:
@@ -504,15 +504,15 @@ def _load_quantities(context, cost_item=None):
         # (import, takeoff, a previous file) — trust what's actually stored
         # over whatever the price panel currently shows. Legacy quantities
         # with no .Unit reset the picker to NONE rather than guess.
-        wm.cost_quantities_unit = _unit_enum_value_for(getattr(quantities[0], "Unit", None))
-        wm.cost_quantities_unit_custom = ""
+        ed.cost_quantities_unit = _unit_enum_value_for(getattr(quantities[0], "Unit", None))
+        ed.cost_quantities_unit_custom = ""
     else:
         # No quantities yet — prefill from the item's price unit as a
         # starting suggestion; the user can still change it freely.
-        wm.cost_quantities_unit, wm.cost_quantities_unit_custom = _active_item_unit_choice(wm)
+        ed.cost_quantities_unit, ed.cost_quantities_unit_custom = _active_item_unit_choice(ed)
 
     for q in quantities:
-        row = wm.cost_quantities.add()
+        row = ed.cost_quantities.add()
         # "Unnamed" is the blank-name sentinel written on apply; show it empty.
         _qname = q.Name or ""
         row.qty_desc = "" if _qname == "Unnamed" else _qname
@@ -541,23 +541,23 @@ def _load_cost_item(context, item_id=None):
     if item_id is None:
         item_id = context.scene.BIMCostProperties.active_cost_item.ifc_definition_id
     cost_item = file.by_id(item_id)
-    wm = context.window_manager
+    ed = context.scene.bonsai5d_cost_editor
 
-    wm.rate_analysis_components.clear()
-    wm.rate_analysis_active_index = 0
-    wm.rate_analysis_overhead_pct = 0.0
-    wm.rate_analysis_profit_pct = 0.0
-    wm.rate_analysis_rounding = 0.0
-    wm.rate_analysis_unit = 'NONE'
-    wm.rate_analysis_unit_custom = ""
-    wm.cost_value_fixed_components.clear()
-    wm.cost_value_fixed_active_index = 0
-    wm.cost_value_fixed_unit = 'NONE'
-    wm.cost_value_fixed_unit_custom = ""
-    wm.cost_value_fixed_unit_mixed = False
-    wm.rate_analysis_drafting = False
-    wm.cost_value_fixed_drafting = False
-    wm.rate_analysis_target_ifc_id = cost_item.id()
+    ed.rate_analysis_components.clear()
+    ed.rate_analysis_active_index = 0
+    ed.rate_analysis_overhead_pct = 0.0
+    ed.rate_analysis_profit_pct = 0.0
+    ed.rate_analysis_rounding = 0.0
+    ed.rate_analysis_unit = 'NONE'
+    ed.rate_analysis_unit_custom = ""
+    ed.cost_value_fixed_components.clear()
+    ed.cost_value_fixed_active_index = 0
+    ed.cost_value_fixed_unit = 'NONE'
+    ed.cost_value_fixed_unit_custom = ""
+    ed.cost_value_fixed_unit_mixed = False
+    ed.rate_analysis_drafting = False
+    ed.cost_value_fixed_drafting = False
+    ed.rate_analysis_target_ifc_id = cost_item.id()
     _read_cost_item_info(context)
 
     found = False
@@ -565,17 +565,17 @@ def _load_cost_item(context, item_id=None):
     cost_values = list(cost_item.CostValues or [])
 
     if is_summary_cost_item(cost_item):
-        wm.cost_value_mode = 'SUM'
+        ed.cost_value_mode = 'SUM'
         found = True
 
     elif cost_item.ObjectType == "RATE_ANALYSIS":
-        wm.cost_value_mode = 'RATE_ANALYSIS'
+        ed.cost_value_mode = 'RATE_ANALYSIS'
 
         # Nested structure: one summary CV with sub-components
         if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
             summary_cv = cost_values[0]
             _, unit_entity = _read_unit_basis_entity(summary_cv)
-            wm.rate_analysis_unit = _unit_enum_value_for(unit_entity)
+            ed.rate_analysis_unit = _unit_enum_value_for(unit_entity)
             cost_values = list(summary_cv.Components or [])
 
         for cv in cost_values:
@@ -583,7 +583,7 @@ def _load_cost_item(context, item_id=None):
 
             if cat in _LINE_CATEGORIES or cat not in _ALL_PA_CATEGORIES:
                 found = True
-                comp = wm.rate_analysis_components.add()
+                comp = ed.rate_analysis_components.add()
                 comp.category = _FROM_IFC.get(cat, 'NONE')
                 comp.description = cv.Name or ""
 
@@ -615,28 +615,28 @@ def _load_cost_item(context, item_id=None):
                 found = True
                 pct = _parse_pct(cv.Name)
                 if pct is not None:
-                    wm.rate_analysis_overhead_pct = pct
+                    ed.rate_analysis_overhead_pct = pct
 
             elif cat == _PROFIT_CAT:
                 found = True
                 pct = _parse_pct(cv.Name)
                 if pct is not None:
-                    wm.rate_analysis_profit_pct = pct
+                    ed.rate_analysis_profit_pct = pct
 
             elif cat == _ROUNDING_CAT:
                 found = True
                 v = cv.AppliedValue
                 if v is not None:
-                    wm.rate_analysis_rounding = float(
+                    ed.rate_analysis_rounding = float(
                         v.wrappedValue if hasattr(v, "wrappedValue") else v
                     )
 
     else:
-        wm.cost_value_mode = 'FIXED'
+        ed.cost_value_mode = 'FIXED'
         found = True
         seen_units = []  # order of first appearance; more than one entry = mixed units
         for cv in cost_values:
-            comp = wm.cost_value_fixed_components.add()
+            comp = ed.cost_value_fixed_components.add()
             comp.category = _FROM_IFC.get(cv.Category or "", 'NONE')
             comp.description = cv.Name or ""
 
@@ -657,8 +657,8 @@ def _load_cost_item(context, item_id=None):
                     pass
 
         if seen_units:
-            wm.cost_value_fixed_unit = seen_units[0]
-            wm.cost_value_fixed_unit_mixed = len(seen_units) > 1
+            ed.cost_value_fixed_unit = seen_units[0]
+            ed.cost_value_fixed_unit_mixed = len(seen_units) > 1
 
     _load_quantities(context, cost_item)
     return found
@@ -666,7 +666,7 @@ def _load_cost_item(context, item_id=None):
 
 _handler_last_check = 0.0
 # Last Bonsai-native active_cost_item id observed by the handler — tracked
-# separately from wm.rate_analysis_target_ifc_id so that operators which
+# separately from ed.rate_analysis_target_ifc_id so that operators which
 # deliberately pin a *different* item without touching Bonsai's own tree
 # selection (e.g. "Load Controlling Item", which may point at an item in a
 # schedule not even shown in the current tree) aren't immediately clobbered
@@ -684,8 +684,8 @@ def _auto_load_handler(scene, depsgraph):
         return
     _handler_last_check = t
     try:
-        wm = bpy.context.window_manager
-        if not wm.rate_analysis_auto_load:
+        ed = bpy.context.scene.bonsai5d_cost_editor
+        if not ed.rate_analysis_auto_load:
             return
         props = bpy.context.scene.BIMCostProperties
         if props.active_cost_item is None or props.active_cost_schedule_id == 0:
@@ -694,11 +694,26 @@ def _auto_load_handler(scene, depsgraph):
         if item_id == _handler_last_seen_active_id:
             return
         _handler_last_seen_active_id = item_id
-        if item_id == wm.rate_analysis_target_ifc_id:
+        if item_id == ed.rate_analysis_target_ifc_id:
             return
         _load_cost_item(bpy.context)
     except Exception:
         pass
+
+
+@bpy.app.handlers.persistent
+def _resync_auto_load_on_undo(scene=None):
+    """Realign the auto-load marker with whatever undo just restored.
+
+    Undo does not rewind module globals, so without this the stale marker lets
+    the next depsgraph update re-fire auto-load over the restored state.
+    """
+    global _handler_last_seen_active_id
+    try:
+        item = bpy.context.scene.BIMCostProperties.active_cost_item
+        _handler_last_seen_active_id = item.ifc_definition_id if item is not None else 0
+    except Exception:
+        _handler_last_seen_active_id = 0
 
 
 # ---------------------------------------------------------------------------
@@ -711,9 +726,9 @@ class RA_OT_AddComponent(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
-        wm.rate_analysis_components.add()
-        wm.rate_analysis_active_index = len(wm.rate_analysis_components) - 1
+        ed = context.scene.bonsai5d_cost_editor
+        ed.rate_analysis_components.add()
+        ed.rate_analysis_active_index = len(ed.rate_analysis_components) - 1
         return {'FINISHED'}
 
 
@@ -732,19 +747,19 @@ class RA_OT_AddFromRate(bpy.types.Operator):
             props = context.scene.BIMCostProperties
             if props.active_cost_item is None or props.active_cost_schedule_id == 0:
                 return False
-            target = context.window_manager.rate_analysis_target_ifc_id
+            target = context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id
             return target == 0 or props.active_cost_item.ifc_definition_id != target
         except Exception:
             return False
 
     def execute(self, context):
         from bonsai import tool
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         props = context.scene.BIMCostProperties
         file = tool.Ifc.get()
         rate_item = file.by_id(props.active_cost_item.ifc_definition_id)
 
-        comp = wm.rate_analysis_components.add()
+        comp = ed.rate_analysis_components.add()
         comp.description = rate_item.Name or ""
         comp.qty = 1.0
         comp.category = _detect_component_category(rate_item)
@@ -752,57 +767,57 @@ class RA_OT_AddFromRate(bpy.types.Operator):
         comp.source_identification = rate_item.Identification or ""
         comp.unit_price = _get_rate_current_value(file, rate_item.id()) or 0.0
 
-        wm.rate_analysis_active_index = len(wm.rate_analysis_components) - 1
+        ed.rate_analysis_active_index = len(ed.rate_analysis_components) - 1
         return {'FINISHED'}
 
 
 # ---------------------------------------------------------------------------
-# Generic base classes for WindowManager collection list operators
+# Generic base classes for cost-editor draft collection list operators
 # ---------------------------------------------------------------------------
 
-class _WMListRemove(bpy.types.Operator):
-    """Remove the active item from a WindowManager CollectionProperty."""
+class _DraftListRemove(bpy.types.Operator):
+    """Remove the active item from a draft CollectionProperty."""
     bl_options = {'REGISTER', 'UNDO'}
     _collection_attr: str
     _index_attr: str
 
     def execute(self, context):
-        wm = context.window_manager
-        items = getattr(wm, self._collection_attr)
-        idx   = getattr(wm, self._index_attr)
+        ed = context.scene.bonsai5d_cost_editor
+        items = getattr(ed, self._collection_attr)
+        idx   = getattr(ed, self._index_attr)
         if 0 <= idx < len(items):
             items.remove(idx)
-            setattr(wm, self._index_attr, max(0, idx - 1))
+            setattr(ed, self._index_attr, max(0, idx - 1))
         return {'FINISHED'}
 
 
-class _WMListMoveUp(bpy.types.Operator):
+class _DraftListMoveUp(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
     _collection_attr: str
     _index_attr: str
 
     def execute(self, context):
-        wm  = context.window_manager
-        items = getattr(wm, self._collection_attr)
-        idx   = getattr(wm, self._index_attr)
+        ed  = context.scene.bonsai5d_cost_editor
+        items = getattr(ed, self._collection_attr)
+        idx   = getattr(ed, self._index_attr)
         if idx > 0:
             items.move(idx, idx - 1)
-            setattr(wm, self._index_attr, idx - 1)
+            setattr(ed, self._index_attr, idx - 1)
         return {'FINISHED'}
 
 
-class _WMListMoveDown(bpy.types.Operator):
+class _DraftListMoveDown(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
     _collection_attr: str
     _index_attr: str
 
     def execute(self, context):
-        wm    = context.window_manager
-        items = getattr(wm, self._collection_attr)
-        idx   = getattr(wm, self._index_attr)
+        ed    = context.scene.bonsai5d_cost_editor
+        items = getattr(ed, self._collection_attr)
+        idx   = getattr(ed, self._index_attr)
         if idx < len(items) - 1:
             items.move(idx, idx + 1)
-            setattr(wm, self._index_attr, idx + 1)
+            setattr(ed, self._index_attr, idx + 1)
         return {'FINISHED'}
 
 
@@ -810,21 +825,21 @@ class _WMListMoveDown(bpy.types.Operator):
 # Rate Analysis list operators
 # ---------------------------------------------------------------------------
 
-class RA_OT_RemoveComponent(_WMListRemove):
+class RA_OT_RemoveComponent(_DraftListRemove):
     bl_idname = "rate_analysis.remove_component"
     bl_label = "Remove Component"
     _collection_attr = "rate_analysis_components"
     _index_attr      = "rate_analysis_active_index"
 
 
-class RA_OT_MoveUp(_WMListMoveUp):
+class RA_OT_MoveUp(_DraftListMoveUp):
     bl_idname = "rate_analysis.move_up"
     bl_label = "Move Up"
     _collection_attr = "rate_analysis_components"
     _index_attr      = "rate_analysis_active_index"
 
 
-class RA_OT_MoveDown(_WMListMoveDown):
+class RA_OT_MoveDown(_DraftListMoveDown):
     bl_idname = "rate_analysis.move_down"
     bl_label = "Move Down"
     _collection_attr = "rate_analysis_components"
@@ -838,12 +853,12 @@ class RA_OT_ClearAll(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
-        wm.rate_analysis_components.clear()
-        wm.rate_analysis_active_index = 0
-        wm.rate_analysis_overhead_pct = 0.0
-        wm.rate_analysis_profit_pct = 0.0
-        wm.rate_analysis_rounding = 0.0
+        ed = context.scene.bonsai5d_cost_editor
+        ed.rate_analysis_components.clear()
+        ed.rate_analysis_active_index = 0
+        ed.rate_analysis_overhead_pct = 0.0
+        ed.rate_analysis_profit_pct = 0.0
+        ed.rate_analysis_rounding = 0.0
         return {'FINISHED'}
 
 
@@ -854,18 +869,18 @@ class RA_OT_StartDraft(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def execute(self, context):
-        wm = context.window_manager
-        wm.rate_analysis_components.clear()
-        wm.rate_analysis_active_index = 0
-        wm.rate_analysis_overhead_pct = 15.0
-        wm.rate_analysis_profit_pct = 10.0
-        wm.rate_analysis_rounding = 0.0
-        wm.rate_analysis_unit = 'NONE'
-        wm.rate_analysis_unit_custom = ""
-        wm.rate_analysis_drafting = True
+        ed = context.scene.bonsai5d_cost_editor
+        ed.rate_analysis_components.clear()
+        ed.rate_analysis_active_index = 0
+        ed.rate_analysis_overhead_pct = 15.0
+        ed.rate_analysis_profit_pct = 10.0
+        ed.rate_analysis_rounding = 0.0
+        ed.rate_analysis_unit = 'NONE'
+        ed.rate_analysis_unit_custom = ""
+        ed.rate_analysis_drafting = True
         return {'FINISHED'}
 
 
@@ -876,16 +891,16 @@ class CV_OT_StartFixedDraft(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def execute(self, context):
-        wm = context.window_manager
-        wm.cost_value_fixed_components.clear()
-        wm.cost_value_fixed_active_index = 0
-        wm.cost_value_fixed_unit = 'NONE'
-        wm.cost_value_fixed_unit_custom = ""
-        wm.cost_value_fixed_unit_mixed = False
-        wm.cost_value_fixed_drafting = True
+        ed = context.scene.bonsai5d_cost_editor
+        ed.cost_value_fixed_components.clear()
+        ed.cost_value_fixed_active_index = 0
+        ed.cost_value_fixed_unit = 'NONE'
+        ed.cost_value_fixed_unit_custom = ""
+        ed.cost_value_fixed_unit_mixed = False
+        ed.cost_value_fixed_drafting = True
         return {'FINISHED'}
 
 
@@ -899,27 +914,27 @@ class CV_OT_AddFixedComponent(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
-        wm.cost_value_fixed_components.add()
-        wm.cost_value_fixed_active_index = len(wm.cost_value_fixed_components) - 1
+        ed = context.scene.bonsai5d_cost_editor
+        ed.cost_value_fixed_components.add()
+        ed.cost_value_fixed_active_index = len(ed.cost_value_fixed_components) - 1
         return {'FINISHED'}
 
 
-class CV_OT_RemoveFixedComponent(_WMListRemove):
+class CV_OT_RemoveFixedComponent(_DraftListRemove):
     bl_idname = "cost_value.remove_fixed_component"
     bl_label = "Remove Cost Value"
     _collection_attr = "cost_value_fixed_components"
     _index_attr      = "cost_value_fixed_active_index"
 
 
-class CV_OT_MoveFixedComponentUp(_WMListMoveUp):
+class CV_OT_MoveFixedComponentUp(_DraftListMoveUp):
     bl_idname = "cost_value.move_fixed_component_up"
     bl_label = "Move Cost Value Up"
     _collection_attr = "cost_value_fixed_components"
     _index_attr      = "cost_value_fixed_active_index"
 
 
-class CV_OT_MoveFixedComponentDown(_WMListMoveDown):
+class CV_OT_MoveFixedComponentDown(_DraftListMoveDown):
     bl_idname = "cost_value.move_fixed_component_down"
     bl_label = "Move Cost Value Down"
     _collection_attr = "cost_value_fixed_components"
@@ -936,8 +951,8 @@ class RA_OT_RefreshComponentRate(bpy.types.Operator):
 
     def execute(self, context):
         from bonsai import tool
-        wm = context.window_manager
-        comps = wm.rate_analysis_components
+        ed = context.scene.bonsai5d_cost_editor
+        comps = ed.rate_analysis_components
         if not (0 <= self.component_index < len(comps)):
             return {'CANCELLED'}
         comp = comps[self.component_index]
@@ -959,15 +974,16 @@ class RA_OT_EditDescription(bpy.types.Operator):
     bl_idname = "rate_analysis.edit_description"
     bl_label = "Edit Description"
     bl_description = "Open Text Editor to edit the item description"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         _remove_description_text()
         text = bpy.data.texts.new(_DESCRIPTION_TEXT_NAME)
-        text.write(wm.rate_analysis_item_description)
+        text.write(ed.rate_analysis_item_description)
         text.cursor_set(0, character=0)
         _open_text_editor(context, text)
-        wm.rate_analysis_editing_description = True
+        ed.rate_analysis_editing_description = True
         return {'FINISHED'}
 
 
@@ -975,15 +991,16 @@ class RA_OT_ApplyDescription(bpy.types.Operator):
     bl_idname = "rate_analysis.apply_description"
     bl_label = "Apply"
     bl_description = "Write the text back to the description and close the editor"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         if _DESCRIPTION_TEXT_NAME in bpy.data.texts:
-            wm.rate_analysis_item_description = bpy.data.texts[_DESCRIPTION_TEXT_NAME].as_string()
+            ed.rate_analysis_item_description = bpy.data.texts[_DESCRIPTION_TEXT_NAME].as_string()
             self.report({'INFO'}, "Description applied")
         _remove_description_text()
         _close_text_editor(context)
-        wm.rate_analysis_editing_description = False
+        ed.rate_analysis_editing_description = False
         return {'FINISHED'}
 
 
@@ -991,11 +1008,12 @@ class RA_OT_CancelDescription(bpy.types.Operator):
     bl_idname = "rate_analysis.cancel_description"
     bl_label = "Cancel"
     bl_description = "Discard changes and close the editor"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         _remove_description_text()
         _close_text_editor(context)
-        context.window_manager.rate_analysis_editing_description = False
+        context.scene.bonsai5d_cost_editor.rate_analysis_editing_description = False
         return {'FINISHED'}
 
 
@@ -1003,10 +1021,11 @@ class RA_OT_SyncItemInfo(*_IfcOperatorBase):
     """Re-read Identification, Name and Description from the active (or pinned) cost item."""
     bl_idname = "rate_analysis.sync_item_info"
     bl_label = "Load identification from IFC"
+    bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        if context.window_manager.rate_analysis_target_ifc_id != 0:
+        if context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0:
             return True
         try:
             props = context.scene.BIMCostProperties
@@ -1015,14 +1034,14 @@ class RA_OT_SyncItemInfo(*_IfcOperatorBase):
             return False
 
     def _execute(self, context):
-        wm = context.window_manager
-        if wm.rate_analysis_target_ifc_id == 0:
+        ed = context.scene.bonsai5d_cost_editor
+        if ed.rate_analysis_target_ifc_id == 0:
             from bonsai import tool
             file = tool.Ifc.get()
             cost_item = file.by_id(
                 context.scene.BIMCostProperties.active_cost_item.ifc_definition_id
             )
-            wm.rate_analysis_target_ifc_id = cost_item.id()
+            ed.rate_analysis_target_ifc_id = cost_item.id()
         _read_cost_item_info(context)
 
 
@@ -1034,15 +1053,15 @@ class RA_OT_ApplyItemInfo(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def _execute(self, context):
         from bonsai import tool
 
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
-        _write_cost_item_info(tool, cost_item, wm)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
+        _write_cost_item_info(tool, cost_item, ed)
         refresh_cost_ui(tool)
         # If this item is a rate controlling CME items, offer to propagate.
         if get_rate_dependents(cost_item):
@@ -1057,15 +1076,15 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        wm = context.window_manager
-        if wm.rate_analysis_target_ifc_id == 0:
+        ed = context.scene.bonsai5d_cost_editor
+        if ed.rate_analysis_target_ifc_id == 0:
             return False
         try:
             from bonsai import tool
             file = tool.Ifc.get()
             if not file:
                 return False
-            return get_rate_controller(file.by_id(wm.rate_analysis_target_ifc_id)) is None
+            return get_rate_controller(file.by_id(ed.rate_analysis_target_ifc_id)) is None
         except Exception:
             return False
 
@@ -1073,17 +1092,17 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         from bonsai import tool
 
 
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         file = tool.Ifc.get()
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         if get_rate_controller(cost_item) is not None:
             self.report({'WARNING'}, "Item is controlled by a rate — unlink first")
             return
 
-        _write_cost_item_info(tool, cost_item, wm)
+        _write_cost_item_info(tool, cost_item, ed)
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": "RATE_ANALYSIS"})
         _remove_analysis_values(tool, cost_item)
-        ct, sg, profit, final = _get_totals(wm)
+        ct, sg, profit, final = _get_totals(ed)
 
         def _add_cv(name, category, amount):
             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
@@ -1096,7 +1115,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
 
         sub_cvs = []
         ordered = sorted(
-            wm.rate_analysis_components,
+            ed.rate_analysis_components,
             key=lambda c: _CATEGORY_WRITE_ORDER.index(c.category)
             if c.category in _CATEGORY_WRITE_ORDER else len(_CATEGORY_WRITE_ORDER),
         )
@@ -1110,17 +1129,17 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
             sub_cvs.append(cv)
 
         sub_cvs.append(_add_cv(
-            _pct_label("Overhead", wm.rate_analysis_overhead_pct), _OVERHEAD_CAT, sg))
+            _pct_label("Overhead", ed.rate_analysis_overhead_pct), _OVERHEAD_CAT, sg))
         sub_cvs.append(_add_cv(
-            _pct_label("Profit", wm.rate_analysis_profit_pct), _PROFIT_CAT, profit))
-        sub_cvs.append(_add_cv("Rounding", _ROUNDING_CAT, wm.rate_analysis_rounding))
+            _pct_label("Profit", ed.rate_analysis_profit_pct), _PROFIT_CAT, profit))
+        sub_cvs.append(_add_cv("Rounding", _ROUNDING_CAT, ed.rate_analysis_rounding))
 
         cv_summary = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
         tool.Ifc.run("cost.edit_cost_value", cost_value=cv_summary, attributes={
             "AppliedValue": round(final, 2),
             "ArithmeticOperator": "ADD",
         })
-        unit_entity = resolve_unit_choice(file, wm.rate_analysis_unit, wm.rate_analysis_unit_custom)
+        unit_entity = resolve_unit_choice(file, ed.rate_analysis_unit, ed.rate_analysis_unit_custom)
         set_unit_basis_entity(file, cv_summary, 1.0, unit_entity)
         _invalidate_custom_units_cache()
 
@@ -1144,16 +1163,16 @@ class CV_OT_ApplySum(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def _execute(self, context):
         from bonsai import tool
 
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         file = tool.Ifc.get()
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
 
-        _write_cost_item_info(tool, cost_item, wm)
+        _write_cost_item_info(tool, cost_item, ed)
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
         _remove_analysis_values(tool, cost_item)
 
@@ -1176,35 +1195,35 @@ class CV_OT_ApplyFixed(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        wm = context.window_manager
-        if wm.rate_analysis_target_ifc_id == 0:
+        ed = context.scene.bonsai5d_cost_editor
+        if ed.rate_analysis_target_ifc_id == 0:
             return False
         try:
             from bonsai import tool
             file = tool.Ifc.get()
             if not file:
                 return False
-            return get_rate_controller(file.by_id(wm.rate_analysis_target_ifc_id)) is None
+            return get_rate_controller(file.by_id(ed.rate_analysis_target_ifc_id)) is None
         except Exception:
             return False
 
     def _execute(self, context):
         from bonsai import tool
 
-        wm = context.window_manager
+        ed = context.scene.bonsai5d_cost_editor
         file = tool.Ifc.get()
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         if get_rate_controller(cost_item) is not None:
             self.report({'WARNING'}, "Item is controlled by a rate — unlink first")
             return
 
-        _write_cost_item_info(tool, cost_item, wm)
+        _write_cost_item_info(tool, cost_item, ed)
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": None})
         _remove_analysis_values(tool, cost_item)
 
-        unit_entity = resolve_unit_choice(file, wm.cost_value_fixed_unit, wm.cost_value_fixed_unit_custom)
+        unit_entity = resolve_unit_choice(file, ed.cost_value_fixed_unit, ed.cost_value_fixed_unit_custom)
 
-        for comp in wm.cost_value_fixed_components:
+        for comp in ed.cost_value_fixed_components:
             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
             tool.Ifc.run("cost.edit_cost_value", cost_value=cv, attributes={
                 "Name": comp.description or None,
@@ -1396,6 +1415,7 @@ class RA_OT_LoadFromIfc(*_IfcOperatorBase):
     """Load rate analysis from the active IFC cost item."""
     bl_idname = "rate_analysis.load_from_ifc"
     bl_label = "Load Rate Analysis from IFC"
+    bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
@@ -1414,18 +1434,19 @@ class RA_OT_LoadController(*_IfcOperatorBase):
     """Load the cost item that controls the current one."""
     bl_idname = "rate_analysis.load_controller"
     bl_label = "Load Controlling Item"
+    bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        wm = context.window_manager
-        if wm.rate_analysis_target_ifc_id == 0:
+        ed = context.scene.bonsai5d_cost_editor
+        if ed.rate_analysis_target_ifc_id == 0:
             return False
         try:
             from bonsai import tool
             file = tool.Ifc.get()
             if not file:
                 return False
-            cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+            cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
             return _get_cost_item_controller(cost_item) is not None
         except Exception:
             return False
@@ -1433,8 +1454,8 @@ class RA_OT_LoadController(*_IfcOperatorBase):
     def _execute(self, context):
         from bonsai import tool
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         controller = _get_cost_item_controller(cost_item)
         if controller:
             _load_cost_item(context, item_id=controller.id())
@@ -1452,7 +1473,7 @@ class RA_OT_UnlinkFromRate(*_IfcOperatorBase):
         try:
             from bonsai import tool
             file = tool.Ifc.get()
-            item_id = context.window_manager.rate_analysis_target_ifc_id
+            item_id = context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id
             if not file or not item_id:
                 return False
             return get_rate_controller(file.by_id(item_id)) is not None
@@ -1462,8 +1483,8 @@ class RA_OT_UnlinkFromRate(*_IfcOperatorBase):
     def _execute(self, context):
         from bonsai import tool
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         if unlink_from_rate(tool, cost_item, copy_info=False):
             refresh_cost_ui(tool)
             _load_cost_item(context, cost_item.id())
@@ -1485,8 +1506,8 @@ class RA_OT_MakeUnique(*_IfcOperatorBase):
     def _execute(self, context):
         from bonsai import tool
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         if unlink_from_rate(tool, cost_item, copy_info=True):
             refresh_cost_ui(tool)
             _load_cost_item(context, cost_item.id())
@@ -1508,8 +1529,8 @@ class RA_OT_DuplicateRate(*_IfcOperatorBase):
     def _execute(self, context):
         from bonsai import tool
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
         if duplicate_and_relink_rate(tool, cost_item) is not None:
             refresh_cost_ui(tool)
             _load_cost_item(context, cost_item.id())
@@ -1529,15 +1550,15 @@ class RA_OT_AddZeroQuantity(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def _execute(self, context):
         from bonsai import tool
 
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
-        unit_entity = resolve_unit_choice(file, wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
+        unit_entity = resolve_unit_choice(file, ed.cost_quantities_unit, ed.cost_quantities_unit_custom)
 
         ifc_class, value_attr = ifc_quantity_type_from_unit(unit_entity)
         kw = {"Name": "Da misurare", value_attr: 0.0}
@@ -1556,10 +1577,10 @@ class QTY_OT_AddRow(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
-        row = wm.cost_quantities.add()
+        ed = context.scene.bonsai5d_cost_editor
+        row = ed.cost_quantities.add()
         row.qty_nr = 1.0
-        wm.cost_quantities_active_index = len(wm.cost_quantities) - 1
+        ed.cost_quantities_active_index = len(ed.cost_quantities) - 1
         return {'FINISHED'}
 
 
@@ -1572,30 +1593,30 @@ class QTY_OT_RemoveRow(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return len(context.window_manager.cost_quantities) > 0
+        return len(context.scene.bonsai5d_cost_editor.cost_quantities) > 0
 
     def execute(self, context):
-        wm = context.window_manager
-        items = wm.cost_quantities
+        ed = context.scene.bonsai5d_cost_editor
+        items = ed.cost_quantities
         indices = [i for i, r in enumerate(items) if r.is_selected]
         if not indices:
-            idx = wm.cost_quantities_active_index
+            idx = ed.cost_quantities_active_index
             if 0 <= idx < len(items):
                 indices = [idx]
         for i in sorted(indices, reverse=True):
             items.remove(i)
-        wm.cost_quantities_active_index = max(0, min(wm.cost_quantities_active_index, len(items) - 1))
+        ed.cost_quantities_active_index = max(0, min(ed.cost_quantities_active_index, len(items) - 1))
         return {'FINISHED'}
 
 
-class QTY_OT_MoveRowUp(_WMListMoveUp):
+class QTY_OT_MoveRowUp(_DraftListMoveUp):
     bl_idname = "cost_quantities.move_row_up"
     bl_label = "Move Row Up"
     _collection_attr = "cost_quantities"
     _index_attr      = "cost_quantities_active_index"
 
 
-class QTY_OT_MoveRowDown(_WMListMoveDown):
+class QTY_OT_MoveRowDown(_DraftListMoveDown):
     bl_idname = "cost_quantities.move_row_down"
     bl_label = "Move Row Down"
     _collection_attr = "cost_quantities"
@@ -1609,10 +1630,10 @@ class QTY_OT_SelectAll(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return len(context.window_manager.cost_quantities) > 0
+        return len(context.scene.bonsai5d_cost_editor.cost_quantities) > 0
 
     def execute(self, context):
-        for row in context.window_manager.cost_quantities:
+        for row in context.scene.bonsai5d_cost_editor.cost_quantities:
             row.is_selected = True
         return {'FINISHED'}
 
@@ -1624,10 +1645,10 @@ class QTY_OT_SelectNone(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return len(context.window_manager.cost_quantities) > 0
+        return len(context.scene.bonsai5d_cost_editor.cost_quantities) > 0
 
     def execute(self, context):
-        for row in context.window_manager.cost_quantities:
+        for row in context.scene.bonsai5d_cost_editor.cost_quantities:
             row.is_selected = False
         return {'FINISHED'}
 
@@ -1640,15 +1661,15 @@ class QTY_OT_CopyRows(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return len(context.window_manager.cost_quantities) > 0
+        return len(context.scene.bonsai5d_cost_editor.cost_quantities) > 0
 
     def execute(self, context):
-        wm = context.window_manager
-        rows = [r for r in wm.cost_quantities if r.is_selected]
+        ed = context.scene.bonsai5d_cost_editor
+        rows = [r for r in ed.cost_quantities if r.is_selected]
         if not rows:
-            idx = wm.cost_quantities_active_index
-            if 0 <= idx < len(wm.cost_quantities):
-                rows = [wm.cost_quantities[idx]]
+            idx = ed.cost_quantities_active_index
+            if 0 <= idx < len(ed.cost_quantities):
+                rows = [ed.cost_quantities[idx]]
         if not rows:
             self.report({'WARNING'}, "No rows to copy")
             return {'CANCELLED'}
@@ -1665,14 +1686,14 @@ class QTY_OT_PasteRows(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        wm = context.window_manager
-        parsed = _deserialize_measure_rows(wm.clipboard)
+        ed = context.scene.bonsai5d_cost_editor
+        parsed = _deserialize_measure_rows(context.window_manager.clipboard)
         if not parsed:
             self.report({'ERROR'}, "Clipboard does not contain copied quantity rows")
             return {'CANCELLED'}
 
-        items = wm.cost_quantities
-        insert_at = wm.cost_quantities_active_index + 1 if len(items) else 0
+        items = ed.cost_quantities
+        insert_at = ed.cost_quantities_active_index + 1 if len(items) else 0
         insert_at = max(0, min(insert_at, len(items)))
 
         for offset, (desc, nr, l, b, h) in enumerate(parsed):
@@ -1684,7 +1705,7 @@ class QTY_OT_PasteRows(bpy.types.Operator):
             if target < new_idx:
                 items.move(new_idx, target)
 
-        wm.cost_quantities_active_index = insert_at + len(parsed) - 1
+        ed.cost_quantities_active_index = insert_at + len(parsed) - 1
         self.report({'INFO'}, f"Pasted {len(parsed)} row(s)")
         return {'FINISHED'}
 
@@ -1693,11 +1714,12 @@ class QTY_OT_Load(*_IfcOperatorBase):
     """Load quantities from the pinned IFC cost item."""
     bl_idname = "cost_quantities.load"
     bl_label = "Load Quantities from IFC"
+    bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        wm = context.window_manager
-        if wm.rate_analysis_target_ifc_id != 0:
+        ed = context.scene.bonsai5d_cost_editor
+        if ed.rate_analysis_target_ifc_id != 0:
             return True
         try:
             props = context.scene.BIMCostProperties
@@ -1717,22 +1739,22 @@ class QTY_OT_Apply(*_IfcOperatorBase):
 
     @classmethod
     def poll(cls, context):
-        return context.window_manager.rate_analysis_target_ifc_id != 0
+        return context.scene.bonsai5d_cost_editor.rate_analysis_target_ifc_id != 0
 
     def _execute(self, context):
         from bonsai import tool
 
         file = tool.Ifc.get()
-        wm = context.window_manager
-        cost_item = file.by_id(wm.rate_analysis_target_ifc_id)
+        ed = context.scene.bonsai5d_cost_editor
+        cost_item = file.by_id(ed.rate_analysis_target_ifc_id)
 
         for q in list(cost_item.CostQuantities or []):
             file.remove(q)
 
-        unit_entity = resolve_unit_choice(file, wm.cost_quantities_unit, wm.cost_quantities_unit_custom)
+        unit_entity = resolve_unit_choice(file, ed.cost_quantities_unit, ed.cost_quantities_unit_custom)
         ifc_class, val_attr = ifc_quantity_type_from_unit(unit_entity)
         new_quantities = []
-        for row in wm.cost_quantities:
+        for row in ed.cost_quantities:
             partial = _compute_partial_qty(row.qty_nr, row.qty_l, row.qty_b, row.qty_h)
             kw = {
                 # IfcPhysicalQuantity.Name is a mandatory attribute; a None name

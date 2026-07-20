@@ -5,7 +5,12 @@
 
 import bpy
 from .prop import classes as _prop_classes
-from .operator import classes as _op_classes, _auto_load_handler, _remove_description_text
+from .operator import (
+    classes as _op_classes,
+    _auto_load_handler,
+    _resync_auto_load_on_undo,
+    _remove_description_text,
+)
 from .ui import classes as _ui_classes
 from . import prop
 
@@ -19,9 +24,15 @@ def register():
     prop.register()
     if _auto_load_handler not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(_auto_load_handler)
+    for hook in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if _resync_auto_load_on_undo not in hook:
+            hook.append(_resync_auto_load_on_undo)
 
 
 def unregister():
+    for hook in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
+        if _resync_auto_load_on_undo in hook:
+            hook.remove(_resync_auto_load_on_undo)
     if _auto_load_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_auto_load_handler)
     _remove_description_text()
