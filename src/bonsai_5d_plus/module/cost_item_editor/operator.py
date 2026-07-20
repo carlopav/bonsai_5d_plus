@@ -702,18 +702,21 @@ def _auto_load_handler(scene, depsgraph):
 
 
 @bpy.app.handlers.persistent
-def _resync_auto_load_on_undo(scene=None):
-    """Realign the auto-load marker with whatever undo just restored.
+def _invalidate_auto_load_memo(scene=None):
+    """Force auto-load to re-evaluate against the current selection after undo.
 
-    Undo does not rewind module globals, so without this the stale marker lets
-    the next depsgraph update re-fire auto-load over the restored state.
+    Auto-load writes target_ifc_id/draft to the Scene from a depsgraph handler,
+    without its own undo step, so undo can land on a snapshot where those
+    predate the load and no longer match Bonsai's restored selection — the
+    panel then shows a different cost item than the one selected. The dedup
+    memo still holds the selection id, so auto-load would treat it as "no
+    change" and never repair the mismatch. Clearing the memo makes the next
+    depsgraph tick re-check: the existing `item_id == target` guard means it
+    only reloads when there is a genuine mismatch, so a consistent undo (e.g. a
+    restored quantity row) is left untouched.
     """
     global _handler_last_seen_active_id
-    try:
-        item = bpy.context.scene.BIMCostProperties.active_cost_item
-        _handler_last_seen_active_id = item.ifc_definition_id if item is not None else 0
-    except Exception:
-        _handler_last_seen_active_id = 0
+    _handler_last_seen_active_id = 0
 
 
 # ---------------------------------------------------------------------------
