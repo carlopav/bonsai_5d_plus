@@ -22,6 +22,7 @@ from ...tool.cost import (
     unlink_from_rate,
     duplicate_and_relink_rate,
     is_summary_cost_item,
+    move_cost_item,
 )
 from ..toolbox.cost_sync.operator import schedule_propagate_popup
 
@@ -1341,6 +1342,56 @@ class RA_OT_AddCostItem(*_IfcOperatorBase):
         _select_and_load(context, new_item.id())
 
 
+class RA_OT_MoveCostItem(*_IfcOperatorBase):
+    """Move the active cost item up or down among its siblings."""
+    bl_idname = "rate_analysis.move_cost_item"
+    bl_label = "Move Cost Item"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    direction: bpy.props.EnumProperty(
+        items=[
+            ('UP',   "Up",   "Move the active cost item up among its siblings"),
+            ('DOWN', "Down", "Move the active cost item down among its siblings"),
+        ],
+        default='UP',
+        options={'SKIP_SAVE'},
+    )
+
+    @classmethod
+    def description(cls, context, properties):
+        where = "up" if properties.direction == 'UP' else "down"
+        return (
+            f"Move the active cost item {where} among its siblings. "
+            "Summary items move with their children"
+        )
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            props = context.scene.BIMCostProperties
+            if not props.active_cost_schedule_id:
+                return False
+            return bool(props.active_cost_item.ifc_definition_id)
+        except Exception:
+            return False
+
+    def _execute(self, context):
+        from bonsai import tool
+
+        file = tool.Ifc.get()
+        props = context.scene.BIMCostProperties
+        cost_item = file.by_id(props.active_cost_item.ifc_definition_id)
+
+        if not move_cost_item(cost_item, -1 if self.direction == 'UP' else 1):
+            edge = "first" if self.direction == 'UP' else "last"
+            self.report({'INFO'}, f"Cost item is already {edge} among its siblings")
+            return
+
+        refresh_cost_ui(tool)
+        # Keep it selected so successive clicks keep moving the same item.
+        _select_and_load(context, cost_item.id())
+
+
 class RA_OT_LoadFromIfc(*_IfcOperatorBase):
     """Load rate analysis from the active IFC cost item."""
     bl_idname = "rate_analysis.load_from_ifc"
@@ -1725,6 +1776,7 @@ classes = [
     CV_OT_ApplySum,
     CV_OT_ApplyFixed,
     RA_OT_AddCostItem,
+    RA_OT_MoveCostItem,
     RA_OT_LoadFromIfc,
     RA_OT_LoadController,
     RA_OT_UnlinkFromRate,

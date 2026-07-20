@@ -145,6 +145,14 @@ class CostItemEditorPanel(bpy.types.Panel):
         op = sub.operator("rate_analysis.add_cost_item", text="", icon="TRIA_RIGHT")
         op.position, op.summary = 'CHILD', False
 
+        row.separator()
+        row.label(text="Reorder:")
+        sub = row.row(align=True)
+        op = sub.operator("rate_analysis.move_cost_item", text="", icon="TRIA_UP")
+        op.direction = 'UP'
+        op = sub.operator("rate_analysis.move_cost_item", text="", icon="TRIA_DOWN")
+        op.direction = 'DOWN'
+
         layout.separator(factor=0.5)
         row = layout.row(align=True)
         row.scale_y = 1.3

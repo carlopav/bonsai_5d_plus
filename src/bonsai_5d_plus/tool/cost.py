@@ -397,6 +397,46 @@ def get_cost_item_children(item):
     ]
 
 
+def get_cost_item_siblings(item):
+    """Return (relation, ordered siblings) for the list `item` belongs to.
+
+    A nested cost item lives in its parent's IfcRelNests.RelatedObjects; a root
+    one in the schedule's IfcRelAssignsToControl.RelatedObjects. Those are the
+    lists Bonsai's cost tree walks (via ifcopenshell.util.cost), so rewriting
+    them is what reorders the schedule. Returns (None, []) if neither is found.
+    """
+    for rel in (item.Nests or []):
+        if rel.RelatingObject.is_a("IfcCostItem") and item in (rel.RelatedObjects or []):
+            return rel, list(rel.RelatedObjects)
+    for rel in (item.HasAssignments or []):
+        if not rel.is_a("IfcRelAssignsToControl"):
+            continue
+        control = rel.RelatingControl
+        if control is not None and control.is_a("IfcCostSchedule"):
+            return rel, list(rel.RelatedObjects)
+    return None, []
+
+
+def move_cost_item(item, offset):
+    """Move item `offset` positions among its siblings, children in tow.
+
+    Summary items carry their whole subtree because it hangs off them by
+    nesting — only the sibling list changes. Returns False (nothing written)
+    when the item is already at the end it is being moved towards.
+    """
+    rel, siblings = get_cost_item_siblings(item)
+    if rel is None:
+        return False
+    index = siblings.index(item)
+    target = index + offset
+    if target < 0 or target >= len(siblings):
+        return False
+    siblings.pop(index)
+    siblings.insert(target, item)
+    rel.RelatedObjects = siblings
+    return True
+
+
 def is_summary_cost_item(item):
     """True if item has a SUM cost value (Category='*')."""
     return any(getattr(cv, "Category", None) == "*" for cv in (item.CostValues or []))
