@@ -23,6 +23,8 @@ from ...tool.cost import (
     duplicate_and_relink_rate,
     is_summary_cost_item,
     move_cost_item,
+    build_cost_value_ref,
+    parse_cost_value_ref,
 )
 from ..toolbox.cost_sync.operator import schedule_propagate_popup
 
@@ -185,29 +187,23 @@ def _detect_component_category(rate_item):
 _QTY_VALUE_ATTR = {k: v['value_attr'] for k, v in QTY_TYPE_INFO.items()}
 _QTY_FROM_IFC   = QTY_FROM_IFC_CLASS
 
+_SAFETY_PCT_CAT = "Safety Percentage"
 _OVERHEAD_CAT = "Overhead"
 _PROFIT_CAT = "Profit"
 _ROUNDING_CAT = "Rounding"
-_ALL_PA_CATEGORIES = _LINE_CATEGORIES | {_OVERHEAD_CAT, _PROFIT_CAT, _ROUNDING_CAT}
+# The markup block doubles as the boundary between components that are subject to
+# markups and those already inclusive of them — see _write_analysis_values.
+_MARKUP_CATEGORIES = {_SAFETY_PCT_CAT, _OVERHEAD_CAT, _PROFIT_CAT, _ROUNDING_CAT}
+_ALL_PA_CATEGORIES = _LINE_CATEGORIES | _MARKUP_CATEGORIES
 
-_IFC_REF_RE = re.compile(r"#ifc:(\d+)")
 _DESCRIPTION_TEXT_NAME = "Bonsai5D+_Description"
 
-
-def _build_cv_ref(source_ifc_id, source_identification):
-    """Build a human-readable Description for a CostValue that references a source item."""
-    ident = source_identification or f"#{source_ifc_id}"
-    return f"ref:[{ident}](#ifc:{source_ifc_id})"
+_build_cv_ref = build_cost_value_ref
 
 
 def _parse_cv_source_id(cv):
     """Return source IFC step-ID from Description (new format) or Condition (legacy), or None."""
-    for field in ("Description", "Condition"):
-        val = getattr(cv, field, None) or ""
-        m = _IFC_REF_RE.search(val)
-        if m:
-            return int(m.group(1))
-    return None
+    return parse_cost_value_ref(cv)[1]
 
 # ---------------------------------------------------------------------------
 # Text editor helpers
@@ -290,11 +286,30 @@ def _get_rate_current_value(file, source_ifc_id):
 
 
 def _get_totals(ed):
-    ct     = sum(round(c.qty * c.unit_price, 2) for c in ed.rate_analysis_components)
-    sg     = round(ct * ed.rate_analysis_overhead_pct / 100.0, 2)
-    profit = round((ct + sg) * ed.rate_analysis_profit_pct / 100.0, 2)
-    final  = ct + sg + profit + ed.rate_analysis_rounding
-    return ct, sg, profit, final
+    """Rate-analysis totals, following the Italian "nuovo prezzo" worksheet.
+
+    Safety, overhead and profit compound on the running total, and components
+    flagged as already inclusive of them stay out of that base, joining only
+    after the marked-up subtotal.
+
+    Returns (ct_base, safety, overhead, profit, subtotal, ct_incl, final).
+    """
+    ct_base = sum(
+        round(c.qty * c.unit_price, 2)
+        for c in ed.rate_analysis_components
+        if c.apply_markup
+    )
+    ct_incl = sum(
+        round(c.qty * c.unit_price, 2)
+        for c in ed.rate_analysis_components
+        if not c.apply_markup
+    )
+    safety   = round(ct_base * ed.rate_analysis_safety_pct / 100.0, 2)
+    overhead = round((ct_base + safety) * ed.rate_analysis_overhead_pct / 100.0, 2)
+    profit   = round((ct_base + safety + overhead) * ed.rate_analysis_profit_pct / 100.0, 2)
+    subtotal = ct_base + safety + overhead + profit
+    final    = subtotal + ct_incl + ed.rate_analysis_rounding
+    return ct_base, safety, overhead, profit, subtotal, ct_incl, final
 
 
 # unit string → (UnitType, SIName, Prefix|None)  — reuse existing IfcSIUnit
@@ -545,6 +560,7 @@ def _load_cost_item(context, item_id=None):
 
     ed.rate_analysis_components.clear()
     ed.rate_analysis_active_index = 0
+    ed.rate_analysis_safety_pct = 0.0
     ed.rate_analysis_overhead_pct = 0.0
     ed.rate_analysis_profit_pct = 0.0
     ed.rate_analysis_rounding = 0.0
@@ -578,6 +594,12 @@ def _load_cost_item(context, item_id=None):
             ed.rate_analysis_unit = _unit_enum_value_for(unit_entity)
             cost_values = list(summary_cv.Components or [])
 
+        # Components written after the markup block already include safety costs,
+        # overhead and profit — their position is what marks them (see
+        # RA_OT_ApplyToIfc). In files written before this convention every
+        # component precedes the block, so they all come back subject to markups.
+        past_markups = False
+
         for cv in cost_values:
             cat = cv.Category or ""
 
@@ -586,6 +608,7 @@ def _load_cost_item(context, item_id=None):
                 comp = ed.rate_analysis_components.add()
                 comp.category = _FROM_IFC.get(cat, 'NONE')
                 comp.description = cv.Name or ""
+                comp.apply_markup = not past_markups
 
                 v = cv.AppliedValue
                 line_total = float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
@@ -605,26 +628,39 @@ def _load_cost_item(context, item_id=None):
                         comp.source_identification = file.by_id(src_id).Identification or ""
                     except Exception:
                         pass
+                else:
+                    # Free-form component: Description carries its extended text.
+                    comp.long_description = cv.Description or ""
 
                 if comp.source_ifc_id:
                     current = _get_rate_current_value(file, comp.source_ifc_id)
                     if current is not None and round(current, 2) != round(comp.unit_price, 2):
                         comp.needs_rate_update = True
 
+            elif cat == _SAFETY_PCT_CAT:
+                found = True
+                past_markups = True
+                pct = _parse_pct(cv.Name)
+                if pct is not None:
+                    ed.rate_analysis_safety_pct = pct
+
             elif cat == _OVERHEAD_CAT:
                 found = True
+                past_markups = True
                 pct = _parse_pct(cv.Name)
                 if pct is not None:
                     ed.rate_analysis_overhead_pct = pct
 
             elif cat == _PROFIT_CAT:
                 found = True
+                past_markups = True
                 pct = _parse_pct(cv.Name)
                 if pct is not None:
                     ed.rate_analysis_profit_pct = pct
 
             elif cat == _ROUNDING_CAT:
                 found = True
+                past_markups = True
                 v = cv.AppliedValue
                 if v is not None:
                     ed.rate_analysis_rounding = float(
@@ -1105,7 +1141,7 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
         _write_cost_item_info(tool, cost_item, ed)
         tool.Ifc.run("cost.edit_cost_item", cost_item=cost_item, attributes={"ObjectType": "RATE_ANALYSIS"})
         _remove_analysis_values(tool, cost_item)
-        ct, sg, profit, final = _get_totals(ed)
+        _, safety, sg, profit, _, _, final = _get_totals(ed)
 
         def _add_cv(name, category, amount):
             cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
@@ -1116,25 +1152,39 @@ class RA_OT_ApplyToIfc(*_IfcOperatorBase):
             })
             return cv
 
-        sub_cvs = []
-        ordered = sorted(
-            ed.rate_analysis_components,
-            key=lambda c: _CATEGORY_WRITE_ORDER.index(c.category)
-            if c.category in _CATEGORY_WRITE_ORDER else len(_CATEGORY_WRITE_ORDER),
-        )
-        for comp in ordered:
-            line_total = round(comp.qty * comp.unit_price, 2)
-            cv = _add_cv(comp.description, _TO_IFC.get(comp.category), line_total)
-            unit_entity = resolve_unit_choice(file, comp.unit, comp.unit_custom)
-            set_unit_basis_entity(file, cv, comp.qty, unit_entity)
-            if comp.source_ifc_id:
-                cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
-            sub_cvs.append(cv)
+        def _add_component_cvs(components):
+            cvs = []
+            ordered = sorted(
+                components,
+                key=lambda c: _CATEGORY_WRITE_ORDER.index(c.category)
+                if c.category in _CATEGORY_WRITE_ORDER else len(_CATEGORY_WRITE_ORDER),
+            )
+            for comp in ordered:
+                line_total = round(comp.qty * comp.unit_price, 2)
+                cv = _add_cv(comp.description, _TO_IFC.get(comp.category), line_total)
+                unit_entity = resolve_unit_choice(file, comp.unit, comp.unit_custom)
+                set_unit_basis_entity(file, cv, comp.qty, unit_entity)
+                if comp.source_ifc_id:
+                    cv.Description = _build_cv_ref(comp.source_ifc_id, comp.source_identification)
+                elif comp.long_description:
+                    # Free-form component: Description is free to hold its own text.
+                    cv.Description = comp.long_description
+                cvs.append(cv)
+            return cvs
 
+        # Components are written on either side of the markup block, which is what
+        # tells them apart on read: those before it are subject to safety, overhead
+        # and profit, those after it already include them. Overhead, profit and
+        # rounding are always written, even at 0%, so the boundary always exists.
+        sub_cvs = _add_component_cvs([c for c in ed.rate_analysis_components if c.apply_markup])
+        if ed.rate_analysis_safety_pct:
+            sub_cvs.append(_add_cv(
+                _pct_label("Safety Costs", ed.rate_analysis_safety_pct), _SAFETY_PCT_CAT, safety))
         sub_cvs.append(_add_cv(
             _pct_label("Overhead", ed.rate_analysis_overhead_pct), _OVERHEAD_CAT, sg))
         sub_cvs.append(_add_cv(
             _pct_label("Profit", ed.rate_analysis_profit_pct), _PROFIT_CAT, profit))
+        sub_cvs += _add_component_cvs([c for c in ed.rate_analysis_components if not c.apply_markup])
         sub_cvs.append(_add_cv("Rounding", _ROUNDING_CAT, ed.rate_analysis_rounding))
 
         cv_summary = tool.Ifc.run("cost.add_cost_value", parent=cost_item)

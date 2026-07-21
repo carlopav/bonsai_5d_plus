@@ -10,6 +10,7 @@ import sys
 import bpy
 
 from ...tool.cost import ifc_unit_to_str as _ifc_unit_to_str
+from ...tool.cost import parse_cost_value_ref
 from ...tool.cost import PRICED_BOQ_TYPES
 from ...tool.cost import hierarchy_code_map as _compute_hierarchy_map
 from ...tool.cost import max_hierarchy_level as _max_hierarchy_level
@@ -673,10 +674,12 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
 import re as _re
 
 _RA_LINE_CATS  = {'Sub-Contract', 'Labor', 'Equipment', 'Material', 'Safety'}
+_RA_SAFETY_PCT = 'Safety Percentage'
 _RA_OVERHEAD   = 'Overhead'
 _RA_PROFIT     = 'Profit'
 _RA_ROUNDING   = 'Rounding'
-_RA_ALL_CATS   = _RA_LINE_CATS | {_RA_OVERHEAD, _RA_PROFIT, _RA_ROUNDING}
+_RA_MARKUP_CATS = {_RA_SAFETY_PCT, _RA_OVERHEAD, _RA_PROFIT, _RA_ROUNDING}
+_RA_ALL_CATS   = _RA_LINE_CATS | _RA_MARKUP_CATS
 
 _RA_CAT_IT = {
     'Sub-Contract': 'Opere Compiute',
@@ -707,6 +710,11 @@ def _ra_read_pct(name):
 
 
 def _ra_read_ub(cv):
+    """(quantity, unit) from a CostValue's UnitBasis, or (None, None).
+
+    "1" is the dimensionless placeholder written by set_unit_basis_entity when no
+    unit was chosen, so it reads back as no unit at all rather than as a symbol.
+    """
     ub = getattr(cv, "UnitBasis", None)
     if ub is None:
         return None, None
@@ -714,7 +722,7 @@ def _ra_read_ub(cv):
         vc = ub.ValueComponent
         qty = float(vc.wrappedValue if hasattr(vc, "wrappedValue") else vc)
         unit = _ifc_unit_to_str(ub.UnitComponent)
-        return qty, unit
+        return qty, ("" if unit == "1" else unit)
     except Exception:
         return None, None
 
@@ -724,26 +732,56 @@ def _ra_val(cv):
     return float(v.wrappedValue if hasattr(v, "wrappedValue") else v) if v is not None else 0.0
 
 
+def _ra_source_info(file, cv):
+    """(identification, long_description) of the price-list item a component came from.
+
+    The identification is taken from the reference text itself, so the code still
+    prints when the source item is gone; the extended description needs the entity
+    and is dropped when it cannot be resolved. Free-form components carry no
+    reference: their own Description text is used as the extended description.
+    """
+    ident, step_id = parse_cost_value_ref(cv)
+    if step_id is None:
+        return "", " ".join((getattr(cv, "Description", None) or "").split())
+    long_description = ""
+    try:
+        source = file.by_id(step_id)
+        if source.is_a("IfcCostItem"):
+            long_description = " ".join((source.Description or "").split())
+            if not ident:
+                ident = source.Identification or ""
+    except Exception:
+        pass
+    return ident, long_description
+
+
 def read_rate_analysis_from_ifc(file, cost_item):
     """Read rate analysis data directly from an IfcCostItem.
 
     Returns a dict with keys: identification, name, description, components,
-    overhead_pct, profit_pct, rounding.  Returns None if the item has no
-    rate-analysis CostValues.
+    safety_pct, overhead_pct, profit_pct, rounding.  Returns None if the item has
+    no rate-analysis CostValues.
+
+    Components carry an `apply_markup` flag read from their position: those
+    written after the markup block already include safety costs, overhead and
+    profit (see RA_OT_ApplyToIfc). Files written before that convention have every
+    component ahead of the block, so they all come back subject to markups.
     """
     components = []
+    safety_pct   = 0.0
     overhead_pct = 0.0
     profit_pct   = 0.0
     rounding     = 0.0
     found        = False
     item_unit    = ""
+    past_markups = False
 
     cost_values = list(cost_item.CostValues or [])
     # Nested structure: one summary CV with sub-components
     if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
         summary_cv = cost_values[0]
         _, item_unit = _ra_read_ub(summary_cv)
-        item_unit = item_unit if item_unit and item_unit != "1" else ""
+        item_unit = item_unit or ""
         cost_values = list(summary_cv.Components or [])
 
     for cv in cost_values:
@@ -757,22 +795,33 @@ def read_rate_analysis_from_ifc(file, cost_item):
                 unit_price = round(total / qty, 6)
             else:
                 qty, unit, unit_price = 1.0, "", total
+            ident, long_description = _ra_source_info(file, cv)
             components.append({
-                'category':    cat if cat in _RA_LINE_CATS else "",
-                'description': cv.Name or "",
-                'qty':         qty,
-                'unit':        unit or "",
-                'unit_price':  unit_price,
-                'line_total':  round(total, 2),
+                'category':         cat if cat in _RA_LINE_CATS else "",
+                'identification':   ident,
+                'description':      cv.Name or "",
+                'long_description': long_description,
+                'qty':              qty,
+                'unit':             unit or "",
+                'unit_price':       unit_price,
+                'line_total':       round(total, 2),
+                'apply_markup':     not past_markups,
             })
+        elif cat == _RA_SAFETY_PCT:
+            found = True
+            past_markups = True
+            safety_pct = _ra_read_pct(cv.Name)
         elif cat == _RA_OVERHEAD:
             found = True
+            past_markups = True
             overhead_pct = _ra_read_pct(cv.Name)
         elif cat == _RA_PROFIT:
             found = True
+            past_markups = True
             profit_pct = _ra_read_pct(cv.Name)
         elif cat == _RA_ROUNDING:
             found = True
+            past_markups = True
             rounding = total
 
     if not found:
@@ -784,59 +833,124 @@ def read_rate_analysis_from_ifc(file, cost_item):
         'description':    cost_item.Description or "",
         'unit':           item_unit,
         'components':     components,
+        'safety_pct':     safety_pct,
         'overhead_pct':   overhead_pct,
         'profit_pct':     profit_pct,
         'rounding':       rounding,
     }
 
 
-def build_rate_analysis_csv(data):
-    """Build the rate-analysis CSV from a dict returned by read_rate_analysis_from_ifc."""
+_RA_INCL_SECTION_LABEL = (
+    "Voci di prezzario di riferimento già comprensive di oneri "
+    "per la sicurezza, spese generali e utile d'impresa"
+)
+# Rendered by the template as "Subtotale <label> :".
+_RA_INCL_SUBTOTAL_LABEL = "voci di prezzario di riferimento"
+
+_RA_DESCRIPTION_FLAG_HELP = (
+    "Print each component's extended description under its name: the price-list "
+    "item's description for linked components, the component's own for free-form "
+    "ones. Off keeps the sheet to one line per component"
+)
+
+
+def build_rate_analysis_csv(data, should_print_description=False):
+    """Build the rate-analysis CSV from a dict returned by read_rate_analysis_from_ifc.
+
+    Lays out the Italian "nuovo prezzo" worksheet: components grouped by category
+    with their subtotals, the compounding markups, then the items that already
+    include those markups listed plainly, and finally rounding and the unit price.
+
+    `should_print_description` turns on the extended description printed under each
+    component's name; it is off by default, keeping the sheet to one line per item.
+    """
     import io
     import csv as _csv
 
-    by_cat = {}
-    for comp in data['components']:
-        cat = comp['category']
-        if cat not in by_cat:
-            by_cat[cat] = []
-        by_cat[cat].append(comp)
-
-    ordered_cats = [c for c in _RA_CAT_ORDER if c in by_cat]
-    ordered_cats += [c for c in by_cat if c not in ordered_cats]
-
+    header = [
+        'row_type', 'category', 'identification', 'description', 'long_description',
+        'qty', 'unit', 'unit_price', 'line_total', 'pct', 'base',
+    ]
     out = io.StringIO()
     w   = _csv.writer(out)
-    w.writerow(['row_type', 'category', 'description', 'qty', 'unit', 'unit_price', 'line_total', 'pct'])
+    w.writerow(header)
+
+    def _row(cells):
+        # Typst's csv() rejects short rows, so trailing columns are padded here
+        # rather than spelled out at every call site.
+        w.writerow(cells + [''] * (len(header) - len(cells)))
+
+    def _component_row(comp):
+        _row([
+            'COMPONENT', comp['category'], comp.get('identification', ''),
+            comp['description'],
+            comp.get('long_description', '') if should_print_description else '',
+            f"{comp['qty']:g}", comp['unit'],
+            f"{comp['unit_price']:.6g}", f"{comp['line_total']:.2f}",
+        ])
+
+    def _summary_row(row_type, label, amount, pct='', base=None, unit=''):
+        # `base` is the amount a percentage is taken on, printed next to it so the
+        # reader can follow the compounding.
+        _row([
+            row_type, '', '', label, '', '', unit, '',
+            f"{amount:.2f}", pct, '' if base is None else f"{base:.2f}",
+        ])
+
+    marked_up = [c for c in data['components'] if c.get('apply_markup', True)]
+    inclusive = [c for c in data['components'] if not c.get('apply_markup', True)]
+
+    by_cat = {}
+    for comp in marked_up:
+        by_cat.setdefault(comp['category'], []).append(comp)
+    ordered_cats = [c for c in _RA_CAT_ORDER if c in by_cat]
+    ordered_cats += [c for c in by_cat if c not in ordered_cats]
 
     ct = 0.0
     for cat in ordered_cats:
         cat_label = _RA_CAT_IT.get(cat, cat)
         cat_total = 0.0
-        w.writerow(['CATEGORY_HEADER', cat, cat_label, '', '', '', '', ''])
+        _row(['CATEGORY_HEADER', cat, '', cat_label])
         for comp in by_cat[cat]:
-            lt = comp['line_total']
-            cat_total += lt
-            ct        += lt
-            w.writerow([
-                'COMPONENT', cat, comp['description'],
-                f"{comp['qty']:g}", comp['unit'],
-                f"{comp['unit_price']:.6g}", f"{lt:.2f}", '',
-            ])
-        w.writerow(['CATEGORY_SUBTOTAL', cat, cat_label, '', '', '', f"{cat_total:.2f}", ''])
+            cat_total += comp['line_total']
+            ct        += comp['line_total']
+            _component_row(comp)
+        _row(['CATEGORY_SUBTOTAL', cat, '', cat_label, '', '', '', '', f"{cat_total:.2f}"])
 
+    safety_pct   = data.get('safety_pct', 0.0)
     overhead_pct = data['overhead_pct']
     profit_pct   = data['profit_pct']
     rounding     = data['rounding']
-    sg     = round(ct * overhead_pct / 100.0, 2)
-    profit = round((ct + sg) * profit_pct / 100.0, 2)
-    final  = ct + sg + profit + rounding
 
-    w.writerow(['SUBTOTAL', '', 'Costo tecnico',   '', '', '', f"{ct:.2f}",     ''])
-    w.writerow(['OVERHEAD', '', 'Spese generali',  '', '', '', f"{sg:.2f}",     f"{overhead_pct:.1f}"])
-    w.writerow(['PROFIT',   '', "Utile d'impresa", '', '', '', f"{profit:.2f}", f"{profit_pct:.1f}"])
-    w.writerow(['ROUNDING', '', 'Arrotondamento',  '', '', '', f"{rounding:.2f}", ''])
-    w.writerow(['TOTAL',    '', 'PREZZO FINALE',   '', '', '', f"{final:.2f}",  ''])
+    safety   = round(ct * safety_pct / 100.0, 2)
+    sg       = round((ct + safety) * overhead_pct / 100.0, 2)
+    profit   = round((ct + safety + sg) * profit_pct / 100.0, 2)
+    subtotal = ct + safety + sg + profit
+    ct_incl  = sum(c['line_total'] for c in inclusive)
+    final    = subtotal + ct_incl + rounding
+
+    _summary_row('SUBTOTAL', 'Totale tecnico', ct)
+    if safety_pct:
+        _summary_row('SAFETY_PCT', 'Costi della sicurezza', safety,
+                     f"{safety_pct:.1f}", base=ct)
+    _summary_row('OVERHEAD', 'Spese generali', sg,
+                 f"{overhead_pct:.1f}", base=ct + safety)
+    _summary_row('PROFIT', "Utile d'impresa", profit,
+                 f"{profit_pct:.1f}", base=ct + safety + sg)
+    _summary_row('SECTION_TOTAL', 'TOTALE', subtotal)
+
+    if inclusive:
+        _row(['SECTION_HEADER', '', '', _RA_INCL_SECTION_LABEL])
+        for comp in inclusive:
+            _component_row(comp)
+        # CATEGORY_SUBTOTAL renders as "Subtotale <label> :", matching the per-category
+        # subtotals above; the TOTALE that follows carries everything before rounding.
+        _row(['CATEGORY_SUBTOTAL', '', '', _RA_INCL_SUBTOTAL_LABEL,
+              '', '', '', '', f"{ct_incl:.2f}"])
+        _summary_row('SECTION_TOTAL', 'TOTALE', subtotal + ct_incl)
+
+    _summary_row('ROUNDING', 'Arrotondamento', rounding)
+    _summary_row('TOTAL', 'PREZZO FINALE', final, unit=data.get('unit', ''))
 
     return out.getvalue()
 
@@ -866,10 +980,22 @@ class ExportRateAnalysisToPdfOperator(bpy.types.Operator):
     bl_label = "Export Rate Analysis to PDF"
     bl_options = {"REGISTER"}
 
+    should_print_description: bpy.props.BoolProperty(
+        name="Show Component Descriptions",
+        description=_RA_DESCRIPTION_FLAG_HELP,
+        default=False,
+    )
+
     @classmethod
     def poll(cls, context):
         ifc, item = _ra_target_item(context)
         return item is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        self.layout.prop(self, "should_print_description")
 
     def execute(self, context):
         from . import typst_render as _tr
@@ -909,7 +1035,11 @@ class ExportRateAnalysisToPdfOperator(bpy.types.Operator):
             project_currency=project_currency,
         )
         try:
-            _tr.compile_document(body, {"rate_analysis.csv": build_rate_analysis_csv(data)}, pdf_path)
+            _tr.compile_document(
+                body,
+                {"rate_analysis.csv": build_rate_analysis_csv(data, self.should_print_description)},
+                pdf_path,
+            )
         except Exception as exc:
             self.report({"ERROR"}, f"PDF generation failed: {exc}")
             return {"CANCELLED"}
@@ -925,12 +1055,24 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
     bl_label = "Export All Rate Analyses to PDF"
     bl_options = {"REGISTER"}
 
+    should_print_description: bpy.props.BoolProperty(
+        name="Show Component Descriptions",
+        description=_RA_DESCRIPTION_FLAG_HELP,
+        default=False,
+    )
+
     @classmethod
     def poll(cls, context):
         try:
             return context.scene.BIMCostProperties.active_cost_schedule_id != 0
         except Exception:
             return False
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        self.layout.prop(self, "should_print_description")
 
     def execute(self, context):
         from . import typst_render as _tr
@@ -1002,7 +1144,7 @@ class ExportAllRateAnalysisToPdfOperator(bpy.types.Operator):
         csvs = {}
         for i, data in enumerate(ra_items):
             csv_name = f"ra_{i:04d}.csv"
-            csvs[csv_name] = build_rate_analysis_csv(data)
+            csvs[csv_name] = build_rate_analysis_csv(data, self.should_print_description)
             if i > 0:
                 body += '#pagebreak()\n'
             body += (

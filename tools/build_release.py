@@ -21,7 +21,9 @@ SRC_PKG = ROOT / "src" / "bonsai_5d_plus"
 PKG_NAME = "bonsai_5d_plus"
 
 _EXCLUDE_DIRS    = {"__pycache__"}
-_EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd", ".zip"}
+# .pdf keeps Typst preview output, which editors drop next to the templates they
+# compile, from being shipped inside the addon.
+_EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".pyd", ".zip", ".pdf"}
 
 
 def _read_version() -> tuple[str, str, str]:

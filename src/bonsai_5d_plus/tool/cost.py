@@ -19,6 +19,7 @@
 """Shared IFC cost helpers — used by module/rate_list_importer and module/import_export."""
 
 import json
+import re
 
 
 # IfcCostSchedule.PredefinedType values handled as a priced Bill of Quantities:
@@ -541,6 +542,39 @@ def get_rate_controller(item):
             if ctrl.is_a("IfcCostItem"):
                 return ctrl
     return None
+
+
+# A rate-analysis component CostValue points back at the price-list IfcCostItem it
+# was taken from. IfcCostValue is not a rooted entity, so it cannot take part in an
+# IfcRelAssignsToControl the way two IfcCostItems do: the link is a text reference
+# carrying both the human-readable Identification and the STEP id.
+_COST_VALUE_REF_RE = re.compile(r"ref:\[([^\]]*)\]\(#ifc:(\d+)\)")
+_COST_VALUE_ID_RE = re.compile(r"#ifc:(\d+)")
+
+
+def build_cost_value_ref(source_ifc_id, source_identification):
+    """The Description text linking a CostValue to the price-list item it came from."""
+    ident = source_identification or f"#{source_ifc_id}"
+    return f"ref:[{ident}](#ifc:{source_ifc_id})"
+
+
+def parse_cost_value_ref(cv):
+    """(identification, step_id) of the price-list item a CostValue refers to.
+
+    Reads the reference from Description (current format) or Condition (legacy,
+    before it moved to Description). Returns ("", None) when there is no
+    reference, and ("", id) for bare `#ifc:<id>` references without an
+    identification.
+    """
+    for field in ("Description", "Condition"):
+        value = getattr(cv, field, None) or ""
+        match = _COST_VALUE_REF_RE.search(value)
+        if match:
+            return match.group(1), int(match.group(2))
+        match = _COST_VALUE_ID_RE.search(value)
+        if match:
+            return "", int(match.group(1))
+    return "", None
 
 
 def get_rate_dependents(rate_item):

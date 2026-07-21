@@ -10,6 +10,9 @@ __pycache__/
 # Build output
 dist/
 
+# Typst preview output, written next to the templates by editor extensions
+src/bonsai_5d_plus/module/prints_manager/typst/*.pdf
+
 # Stale zip in src/
 src/*.zip
 

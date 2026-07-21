@@ -15,6 +15,15 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
         options={'SKIP_SAVE'},
     )
     description: bpy.props.StringProperty(name="Description", options={'SKIP_SAVE'})
+    long_description: bpy.props.StringProperty(
+        name="Extended Description",
+        description=(
+            "Extended description shown under the name in the rate-analysis print. "
+            "Editable for free-form components; components taken from a price-list "
+            "item show that item's description instead"
+        ),
+        options={'SKIP_SAVE'},
+    )
     unit: bpy.props.EnumProperty(name="Unit", items=_unit_enum_items, options={'SKIP_SAVE'})
     unit_custom: bpy.props.StringProperty(
         name="Custom Unit",
@@ -40,6 +49,15 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
         default=False,
         options={'SKIP_SAVE'},
     )
+    apply_markup: bpy.props.BoolProperty(
+        name="Subject to Markups",
+        description=(
+            "When off, this item's price already includes safety costs, overhead and "
+            "profit: it stays out of their base and is added after the marked-up subtotal"
+        ),
+        default=True,
+        options={'SKIP_SAVE'},
+    )
 
 
 class MeasureRow(bpy.types.PropertyGroup):
@@ -58,14 +76,19 @@ class CostItemEditorProps(bpy.types.PropertyGroup):
 
     rate_analysis_components: bpy.props.CollectionProperty(type=RateAnalysisComponent)
     rate_analysis_active_index: bpy.props.IntProperty(default=0)
+    rate_analysis_safety_pct: bpy.props.FloatProperty(
+        name="Safety %",
+        description="Safety costs percentage applied to technical cost",
+        default=0.0, min=0.0, max=100.0, precision=1,
+    )
     rate_analysis_overhead_pct: bpy.props.FloatProperty(
         name="Overhead %",
-        description="Overhead percentage applied to technical cost",
+        description="Overhead percentage applied to (technical cost + safety costs)",
         default=15.0, min=0.0, max=100.0, precision=1,
     )
     rate_analysis_profit_pct: bpy.props.FloatProperty(
         name="Profit %",
-        description="Profit margin applied to (technical cost + overhead)",
+        description="Profit margin applied to (technical cost + safety costs + overhead)",
         default=10.0, min=0.0, max=100.0, precision=1,
     )
     rate_analysis_rounding: bpy.props.FloatProperty(

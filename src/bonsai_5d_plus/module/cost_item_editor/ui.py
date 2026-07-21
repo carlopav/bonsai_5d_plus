@@ -94,6 +94,10 @@ class RATE_UL_analysis(bpy.types.UIList):
         subtotal = item.qty * item.unit_price
         unit_label = _unit_display_label(item.unit, item.unit_custom)
         row.label(text=f"{item.qty:.3g} {unit_label}  ×  {item.unit_price:.2f}  =  {subtotal:.2f}")
+        row.prop(
+            item, "apply_markup", text="", emboss=False,
+            icon='CHECKBOX_HLT' if item.apply_markup else 'CHECKBOX_DEHLT',
+        )
         if item.needs_rate_update:
             op = row.operator(
                 "rate_analysis.refresh_component_rate",
@@ -387,7 +391,11 @@ def _draw_rate_analysis(layout, context):
         row.prop_enum(comp, "category", 'EQUIPMENT',    icon="AUTO")
         row.prop_enum(comp, "category", 'MATERIAL',     icon="MATERIAL")
         row.prop_enum(comp, "category", 'SAFETY',       icon="LOCKED")
-        box.prop(comp, "description")
+        box.prop(comp, "description", text="Name")
+        # A free-form component owns its extended description; a linked one shows
+        # the source price-list item's description in the print instead.
+        if not comp.source_ifc_id:
+            box.prop(comp, "long_description", text="Description")
         row = box.row(align=True)
         row.prop(comp, "qty")
         row.prop(comp, "unit", text="UM")
@@ -399,33 +407,50 @@ def _draw_rate_analysis(layout, context):
         if comp.source_ifc_id:
             ref_label = comp.source_identification or f"#{comp.source_ifc_id}"
             row.label(text=f"Rate ref: {ref_label}", icon="LINKED")
+        box.prop(comp, "apply_markup", text="Subject to safety costs, overhead and profit")
 
-    ct, sg, profit, final = _get_totals(ed)
+    ct, safety, sg, profit, subtotal, ct_incl, final = _get_totals(ed)
     box = body.box()
 
+    def _amount_row(label, amount):
+        split = box.split(factor=0.6)
+        split.label(text=label)
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{amount:.2f}")
+
+    def _pct_row(prop_name, label, amount):
+        split = box.split(factor=0.6)
+        split.prop(ed, prop_name, text=label)
+        r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{amount:.2f}")
+
+    # Category subtotals cover the marked-up base only; items already inclusive of
+    # markups get their own section below.
     cat_totals = {}
     for c in ed.rate_analysis_components:
-        cat_totals[c.category] = cat_totals.get(c.category, 0.0) + c.qty * c.unit_price
+        if c.apply_markup:
+            cat_totals[c.category] = cat_totals.get(c.category, 0.0) + c.qty * c.unit_price
     for cat_id, cat_label, _ in COMPONENT_CATEGORIES:
         total = cat_totals.get(cat_id, 0.0)
         if total:
-            split = box.split(factor=0.6)
-            split.label(text=f"{cat_label}:")
-            r = split.row()
-            r.alignment = 'RIGHT'
-            r.label(text=f"{total:.2f}")
+            _amount_row(f"{cat_label}:", total)
 
     box.separator(factor=0.3)
-    split = box.split(factor=0.6)
-    split.label(text="Technical Cost:")
-    r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{ct:.2f}")
+    _amount_row("Technical Cost:", ct)
     box.separator(factor=0.3)
-    split = box.split(factor=0.6)
-    split.prop(ed, "rate_analysis_overhead_pct", text="Overhead %")
-    r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{sg:.2f}")
-    split = box.split(factor=0.6)
-    split.prop(ed, "rate_analysis_profit_pct", text="Profit %")
-    r = split.row(); r.alignment = 'RIGHT'; r.label(text=f"{profit:.2f}")
+    _pct_row("rate_analysis_safety_pct", "Safety %", safety)
+    _pct_row("rate_analysis_overhead_pct", "Overhead %", sg)
+    _pct_row("rate_analysis_profit_pct", "Profit %", profit)
+
+    if ct_incl:
+        box.separator(factor=0.3)
+        _amount_row("Subtotal:", subtotal)
+        box.separator(factor=0.3)
+        col = box.column()
+        col.scale_y = 0.7
+        col.label(text="Rate items already including safety costs,")
+        col.label(text="overhead and profit:")
+        _amount_row("", ct_incl)
+
+    box.separator(factor=0.3)
     split = box.split(factor=0.6)
     split.prop(ed, "rate_analysis_rounding", text="Rounding")
     split.label(text="")
