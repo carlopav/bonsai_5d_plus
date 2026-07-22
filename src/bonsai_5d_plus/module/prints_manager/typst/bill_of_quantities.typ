@@ -98,26 +98,36 @@
   if vals.any(v => v == none) { () } else { vals }
 }
 
-// The portion of a formula worth showing verbatim next to the quantity, or ""
-// when nothing meaningful remains. When the formula is the expected product of
-// numeric factors, trivial "1" factors carry no information and are dropped, so
-// "(409.172-60) × 1 × 1 × 1" collapses to "(409.172-60)", and a result made of a
-// single plain number (e.g. "5") only repeats the quantity and is hidden. When
-// the formula is not in that expected shape — any factor isn't a numeric
-// expression — it is shown in full, since we can't tell which parts matter.
+// The portion of a formula worth showing next to the quantity, or "" when
+// nothing meaningful remains. The measurement book always writes the four fixed
+// factors "NR × L × B × H", padding the unused ones with 0, so a formula arrives
+// here as e.g. "3 × 2.05 × 0 × 0". Only the factors carrying an actual
+// measurement are shown: zeros are dropped, the rest are printed to two decimals
+// and joined with "*" without spaces, giving "(3.00*2.05)", "(1.00)",
+// "(4.00*5.50*0.50)". Printing the padding zeros made the parenthesis look like
+// the decomposition columns even when those were switched off (issue #13).
+// A factor that is an expression rather than a plain number is kept verbatim —
+// rounding it to two decimals would throw away how the value was obtained — but
+// is wrapped in parentheses, since "*" is now the separator too and "25*0.1*3.00"
+// would not show where one factor ends. A formula with any factor we cannot
+// evaluate is shown in full, since we can't tell which parts matter.
 #let formula-display(f) = {
   let t = f.trim()
   if t == "" { return "" }
   let parts = t.split("×").map(p => p.trim()).filter(p => p != "")
   // Unexpected format: any non-numeric factor → show the formula in full.
   if parts.any(p => eval-factor(p) == none) { return t }
-  // Drop trivial "1" factors.
-  let informative = parts.filter(p => eval-factor(p) != 1.0)
+  let informative = parts.filter(p => eval-factor(p) != 0.0)
   if informative.len() == 0 { return "" }
-  if informative.len() == 1 and informative.at(0).match(regex("^[\\d\\.]+$")) != none {
-    return ""
-  }
-  informative.join(" × ")
+  informative
+    .map(p => if p.match(regex("^[\\d\\.]+$")) != none {
+      format-decimal(float(p), places: 2)
+    } else if p.starts-with("(") and p.ends-with(")") {
+      p
+    } else {
+      "(" + p + ")"
+    })
+    .join("*")
 }
 
 // — Page frame (drawn in the page background). Widths sum to 185mm. —
