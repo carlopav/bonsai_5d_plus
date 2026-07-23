@@ -94,8 +94,8 @@ HEADER_BG = "D9D9D9"
 
 # Decimal places for the rounding policy (see typst/common.typ). Kept in step
 # with the Typst side so PDF and ODS agree figure for figure.
-QTY_PLACES = 2
-MONEY_PLACES = 2
+QTY_DECIMALS = 2
+VALUE_DECIMALS = 2
 
 
 class _StyleFactory:
@@ -310,11 +310,11 @@ def build_bill_of_quantities(doc, rows, options):
     round_values = options.get("should_eval_rounded_values", True)
 
     def _round(x):
-        return round(x, QTY_PLACES) if round_values else x
+        return round(x, QTY_DECIMALS) if round_values else x
 
     def _mult_formula(cell1, cell2):
         raw = "{}*{}".format(cell1, cell2)
-        return "=ROUND({};{})".format(raw, MONEY_PLACES) if round_values else "=" + raw
+        return "=ROUND({};{})".format(raw, VALUE_DECIMALS) if round_values else "=" + raw
     currency = options.get("currency", "")
 
     sheet_name = "Bill of Quantities"

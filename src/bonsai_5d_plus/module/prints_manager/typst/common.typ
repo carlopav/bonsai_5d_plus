@@ -49,11 +49,11 @@
 // should_eval_rounded_values, on by default); off restores the raw arithmetic
 // that matches Bonsai's own cost panel.
 
-#let QTY_PLACES = 2
-#let MONEY_PLACES = 2
+#let QTY_DECIMALS = 2
+#let VALUE_DECIMALS = 2
 
-#let round-qty(x) = calc.round(float(x), digits: QTY_PLACES)
-#let round-money(x) = calc.round(float(x), digits: MONEY_PLACES)
+#let round-qty(x) = calc.round(float(x), digits: QTY_DECIMALS)
+#let round-money(x) = calc.round(float(x), digits: VALUE_DECIMALS)
 
 // CSV cells are strings and an unmeasured item leaves them empty.
 #let num-or-zero(row, key) = {
