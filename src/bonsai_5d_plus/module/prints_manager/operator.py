@@ -798,6 +798,9 @@ def read_rate_analysis_from_ifc(file, cost_item):
     safety_pct   = 0.0
     overhead_pct = 0.0
     profit_pct   = 0.0
+    safety       = 0.0   # markup amounts, read from IFC (not recomputed)
+    overhead     = 0.0
+    profit       = 0.0
     rounding     = 0.0
     found        = False
     item_unit    = ""
@@ -838,14 +841,17 @@ def read_rate_analysis_from_ifc(file, cost_item):
             found = True
             past_markups = True
             safety_pct = _ra_read_pct(cv.Name)
+            safety = total
         elif cat == _RA_OVERHEAD:
             found = True
             past_markups = True
             overhead_pct = _ra_read_pct(cv.Name)
+            overhead = total
         elif cat == _RA_PROFIT:
             found = True
             past_markups = True
             profit_pct = _ra_read_pct(cv.Name)
+            profit = total
         elif cat == _RA_ROUNDING:
             found = True
             past_markups = True
@@ -863,6 +869,9 @@ def read_rate_analysis_from_ifc(file, cost_item):
         'safety_pct':     safety_pct,
         'overhead_pct':   overhead_pct,
         'profit_pct':     profit_pct,
+        'safety':         safety,
+        'overhead':       overhead,
+        'profit':         profit,
         'rounding':       rounding,
     }
 
@@ -949,9 +958,16 @@ def build_rate_analysis_csv(data, should_print_description=False):
     profit_pct   = data['profit_pct']
     rounding     = data['rounding']
 
-    safety   = round(ct * safety_pct / 100.0, 2)
-    sg       = round((ct + safety) * overhead_pct / 100.0, 2)
-    profit   = round((ct + safety + sg) * profit_pct / 100.0, 2)
+    # Markup amounts are read from IFC (read_rate_analysis_from_ifc), not
+    # recomputed from ct × pct — the percentage serves only as the label. So the
+    # sheet reports exactly the stored values, and its final price equals the
+    # item's price in the BoQ, which ifc5d likewise derives by summing the same
+    # stored component values. The base each percentage is taken on is shown as
+    # the running total of those stored amounts, keeping the "x% di …" label
+    # consistent with the amount beside it.
+    safety   = data.get('safety', 0.0)
+    sg       = data.get('overhead', 0.0)
+    profit   = data.get('profit', 0.0)
     subtotal = ct + safety + sg + profit
     ct_incl  = sum(c['line_total'] for c in inclusive)
     final    = subtotal + ct_incl + rounding
