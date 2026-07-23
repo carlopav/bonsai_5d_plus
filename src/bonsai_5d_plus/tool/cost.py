@@ -1012,8 +1012,12 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                     )
                 elif float(rate["value"]) != 0.0:
                     cv = tool.Ifc.run("cost.add_cost_value", parent=cost_item)
+                    # Store the source value verbatim, as Bonsai does — no
+                    # rounding on write. The parser has already trimmed float
+                    # noise to 6 places; rounding is a presentation concern,
+                    # applied in the exporters (see typst/common.typ).
                     tool.Ifc.run("cost.edit_cost_value", cost_value=cv,
-                                 attributes={"AppliedValue": round(float(rate["value"]), 2)})
+                                 attributes={"AppliedValue": float(rate["value"])})
 
                 unit = rate.get("unit", "")
                 ifc_class, value_attr = ifc_quantity_type(unit)
@@ -1031,7 +1035,7 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                             continue
                         kw = {
                             "Name": rg["desc"] or "Qty",
-                            value_attr: round(rg["qty"], 4),
+                            value_attr: rg["qty"],
                         }
                         if unit_entity is not None:
                             kw["Unit"] = unit_entity
@@ -1044,7 +1048,7 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                         # All rows were empty placeholders → keep the VCItem total.
                         kw = {
                             "Name": rate.get("qty_name") or "Qty",
-                            value_attr: round(quantity, 4),
+                            value_attr: quantity,
                         }
                         if unit_entity is not None:
                             kw["Unit"] = unit_entity
@@ -1053,7 +1057,7 @@ def build_cme_schedule(parser, schedule_name, ep_ifc_map, report=None, import_me
                 elif quantity != 0.0:
                     kw = {
                         "Name": rate.get("qty_name") or "Qty",
-                        value_attr: round(quantity, 4),
+                        value_attr: quantity,
                     }
                     if unit_entity is not None:
                         kw["Unit"] = unit_entity

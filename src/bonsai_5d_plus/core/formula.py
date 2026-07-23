@@ -55,8 +55,8 @@ def split_formula(formula, value):
 
     Returns (PartiUguali, Lunghezza, Larghezza, HPeso, faithful). The standard
     case is the importer's "n × l × w × h" product of 1–4 factors: each goes in a
-    column ('1'/empty → "", an expression keeps its text without the importer's
-    protective parentheses) and ``faithful`` is True.
+    column ('1'/'0'/empty → "", an expression keeps its text without the
+    importer's protective parentheses) and ``faithful`` is True.
 
     For anything that can't be represented as ≤4 factors whose product equals the
     quantity value — more than four factors, a non-arithmetic formula, or a
@@ -70,7 +70,12 @@ def split_formula(formula, value):
         if 1 <= len(parts) <= 4:
             cells = []
             for p in parts:
-                if p in ("", "1"):
+                # An unused position is written as "1" by the XPWE importer and as
+                # "0" by the measurement book (which skips zero fields when it
+                # computes the partial). Both mean "no factor on this axis"; left
+                # in, a "0" would zero the product and the row would never
+                # reconcile with its value.
+                if p in ("", "1", "0"):
                     cells.append("")
                 else:
                     if p.startswith("(") and p.endswith(")"):

@@ -538,8 +538,12 @@ def _draw_quantities(layout, context):
 
     # Total row — "Totale:" centred, value aligned with "Parziale" column
     # Split factor ≈ (spacer+desc+4cols) / total_scale_units: 0.9+2.0+5.6 / 9.9 ≈ 0.86
+    # Sum of the *rounded* partials, so the total matches the 2-decimal figures
+    # shown per row (see the rounding policy in typst/common.typ) — the same
+    # figures the printed BoQ adds up. Display only: the stored quantities keep
+    # full precision, so this never diverges from what Apply writes to IFC.
     total = sum(
-        _compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h)
+        round(_compute_partial_qty(r.qty_nr, r.qty_l, r.qty_b, r.qty_h), 2)
         for r in ed.cost_quantities
     )
     unit_label = _unit_display_label(ed.cost_quantities_unit, ed.cost_quantities_unit_custom)

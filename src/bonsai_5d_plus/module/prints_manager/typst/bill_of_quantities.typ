@@ -33,10 +33,13 @@
   if type(v) == int or type(v) == float { float(v) } else { none }
 }
 
-// A decomposition factor rendered as a small single-value cell: a value of 1
-// is shown as "-" (no real subdivision on that axis); any other value is shown
-// with two decimals. One point smaller than the table text to fit the columns.
-#let factor-cell(v) = text(7pt)[#(if v == 1.0 { "-" } else { format-decimal(v, places: 2) })]
+// A decomposition factor rendered as a small single-value cell: an unused axis
+// is shown as "-" — written as 1 by the XPWE importer and as 0 by the
+// measurement book, both meaning "no subdivision here". Any other value is
+// shown with two decimals. One point smaller than the table text to fit.
+#let factor-cell(v) = text(7pt)[#(
+  if v == 1.0 or v == 0.0 { "-" } else { format-decimal(v, places: 2) }
+)]
 
 // Render already-formatted content in red when its underlying numeric value is
 // negative; otherwise leave it untouched. Used to flag negative quantities and
@@ -106,9 +109,20 @@
 // and joined with "*" without spaces, giving "(3.00*2.05)", "(1.00)",
 // "(4.00*5.50*0.50)". Printing the padding zeros made the parenthesis look like
 // the decomposition columns even when those were switched off (issue #13).
+// Dropping the padding is not a single rule, because the two writers pad the
+// unused positions differently:
+//   - the measurement book (_build_formula_qty) writes 0, and skips zero fields
+//     when computing the partial, so a 0 is always padding;
+//   - the XPWE import (core/parsers/xpwe.py) writes 1 for an empty column, so
+//     there a 1 is padding — but a 1 typed into the NR field is a real count.
+// From the string alone those two 1s are indistinguishable. What saves us is
+// that a factor of 1 never changes the product: it is dropped whenever another
+// factor survives, and kept only when it is all that is left, which is exactly
+// the "one item, no dimensions" row.
+//
 // A factor that is an expression rather than a plain number is kept verbatim —
 // rounding it to two decimals would throw away how the value was obtained — but
-// is wrapped in parentheses, since "*" is now the separator too and "25*0.1*3.00"
+// is wrapped in parentheses, since "*" is the separator too and "25*0.1*3.00"
 // would not show where one factor ends. A formula with any factor we cannot
 // evaluate is shown in full, since we can't tell which parts matter.
 #let formula-display(f) = {
@@ -117,9 +131,11 @@
   let parts = t.split("×").map(p => p.trim()).filter(p => p != "")
   // Unexpected format: any non-numeric factor → show the formula in full.
   if parts.any(p => eval-factor(p) == none) { return t }
-  let informative = parts.filter(p => eval-factor(p) != 0.0)
-  if informative.len() == 0 { return "" }
-  informative
+  let measured = parts.filter(p => eval-factor(p) != 0.0)
+  if measured.len() == 0 { return "" }
+  let significant = measured.filter(p => eval-factor(p) != 1.0)
+  if significant.len() == 0 { return format-decimal(1.0, places: 2) }
+  significant
     .map(p => if p.match(regex("^[\\d\\.]+$")) != none {
       format-decimal(float(p), places: 2)
     } else if p.starts-with("(") and p.ends-with(")") {
@@ -165,7 +181,7 @@
   text(size: 8pt)[Sub Total (#currency)], text(size: 8pt)[Total (#currency)],
 )
 
-#let arrange_bill_of_quantity_row(row, options) = {
+#let arrange_bill_of_quantity_row(row, options, totals) = {
   let show_decomp = options.at("should_print_qty_decomposition")
   // Empty decomposition cells, present only in decomposition mode.
   let mid = if show_decomp { ([], [], [], []) } else { () }
@@ -177,7 +193,7 @@
   if row.at("ItemIsASum") == "True" {
     // SECTION (parent cost item)
     if options.at("nested_structure_depth") == 0 or int(row.at("Index")) <= options.at("nested_structure_depth") {
-      let total_price = format-decimal(float(row.at("TotalPrice", default: "0.0")), places: 2)
+      let total_price = format-decimal(totals.at(row.at("Id", default: ""), default: 0.0), places: 2)
       let rblank = table.cell(..root-cost-cell-style)[]
       let rmid = if show_decomp { (rblank, rblank, rblank, rblank) } else { () }
       let total_cell = if options.at("should_print_rates") == true {
@@ -201,9 +217,13 @@
     } else { "" }
     let unit_str = fmt-unit(row.at("Unit", default: ""))
     let unit = table.cell(align: right)[#if unit_str != "" { unit_str } else { "-" }]
-    let quant_v = if row.at("Quantity") == "" { 0.0 } else { float(row.at("Quantity")) }
-    let rate_v = if row.at("RateSubtotal") == "" { 0.0 } else { float(row.at("RateSubtotal")) }
-    let total_v = quant_v * rate_v
+    // Rounded early and summed from the rounded parts — see the rounding
+    // policy in common.typ. quant_v is the sum of the rounded measurement
+    // rows, so the Quantity column adds up to the breakdown below it.
+    let rounded = options.at("should_eval_rounded_values", default: true)
+    let quant_v = row-quantity(row, rounded: rounded)
+    let rate_v = row-rate(row, rounded: rounded)
+    let total_v = row-total(row, rounded: rounded)
     let quant = format-decimal(quant_v)
     let rate = format-decimal(rate_v)
     let total = format-decimal(total_v, places: 2)
@@ -247,12 +267,13 @@
   }
 }
 
-#let arrange_summary_row(row, options) = {
+#let arrange_summary_row(row, options, totals) = {
   // The summary only lists summary costs, which never carry a meaningful code.
   // So whenever hierarchy renumbering is on (the generated code owns the first
   // column), hide the Identification here and show only the hierarchy number.
   let move_ident = options.at("should_print_hierarchy")
   if row.at("ItemIsASum") == "True" {
+    let subtotal = totals.at(row.at("Id", default: ""), default: 0.0)
     if row.at("Index") == "1" {
       // ROOT COST
       (
@@ -260,7 +281,7 @@
         strong(upper(row.at("Name"))),
         [],
         if options.at("should_print_rates") {
-          strong[#format-decimal(float(row.at("TotalPrice")), places: 2)]
+          strong[#format-decimal(subtotal, places: 2)]
         } else { [] },
       )
     } else {
@@ -268,7 +289,7 @@
       (
         id-cell(row, options.at("should_print_hierarchy"), move_ident: move_ident),
         table.cell(inset: (left: int(row.at("Index")) * 2.5mm))[#upper(row.at("Name"))],
-        if options.at("should_print_rates") { format-decimal(float(row.at("TotalPrice")), places: 2) } else { [] },
+        if options.at("should_print_rates") { format-decimal(subtotal, places: 2) } else { [] },
         [],
       )
     }
@@ -280,6 +301,7 @@
 #let create-schedule(path, options) = {
   let show_decomp = options.at("should_print_qty_decomposition")
   let data = csv(path, row-type: dictionary)
+  let totals = section-totals(data, rounded: options.at("should_eval_rounded_values", default: true))
   let cols = if show_decomp {
     (18mm, 1fr, 12mm, 12mm, 12mm, 12mm, 20mm, 20mm, 25mm)
   } else {
@@ -307,7 +329,7 @@
   let current = ()
   let has_leaf = false
   for item in data {
-    let cells = arrange_bill_of_quantity_row(item, options)
+    let cells = arrange_bill_of_quantity_row(item, options, totals)
     let is_sum = item.at("ItemIsASum") == "True"
     let lvl = int(item.at("Index", default: "1"))
     let rendered = cells.len() > 0
@@ -329,14 +351,11 @@
 
 #let create-summary(path, options, currency: "") = {
   let data = csv(path, row-type: dictionary)
-  let new_rows = data.map(item => arrange_summary_row(item, options))
-  let general_total = data.filter(row => row.at("ItemIsASum") == "False")
-    .map(row => {
-      let qty = if row.at("Quantity", default: "") == "" { 0.0 } else { float(row.at("Quantity")) }
-      let rate = if row.at("RateSubtotal", default: "") == "" { 0.0 } else { float(row.at("RateSubtotal")) }
-      qty * rate
-    })
-    .sum(default: 0.00)
+  let rounded = options.at("should_eval_rounded_values", default: true)
+  let totals = section-totals(data, rounded: rounded)
+  let new_rows = data.map(item => arrange_summary_row(item, options, totals))
+  // Sum of the top-level rows, so the page adds up to the sections listed on it.
+  let general_total = general-total(data, totals, rounded: rounded)
 
   set text(size: 10pt)
   pad(left: 2cm)[SUMMARY:]
@@ -382,6 +401,7 @@
   should_print_qty_decomposition: false,
   should_print_rates: true,
   should_print_summary: true,
+  should_eval_rounded_values: true,
   body,
 ) = {
   set text(font: template_fonts, size: 8pt, lang: "en")
@@ -412,6 +432,7 @@
     "should_print_each_quantity": should_print_each_quantity,
     "should_print_qty_decomposition": should_print_qty_decomposition,
     "should_print_rates": should_print_rates,
+    "should_eval_rounded_values": should_eval_rounded_values,
   )
 
   create-schedule(schedule_path, options)

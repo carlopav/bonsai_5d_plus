@@ -92,6 +92,11 @@ SECTION_BG = "F2F2F2"
 GRAND_TOTAL_BG = "D9D9D9"
 HEADER_BG = "D9D9D9"
 
+# Decimal places for the rounding policy (see typst/common.typ). Kept in step
+# with the Typst side so PDF and ODS agree figure for figure.
+QTY_PLACES = 2
+MONEY_PLACES = 2
+
 
 class _StyleFactory:
     """Creates and caches odf automatic styles for a single document."""
@@ -298,6 +303,18 @@ def build_bill_of_quantities(doc, rows, options):
     show_each_qty = options["should_print_each_quantity"]
     move_ident = options["should_move_identification"] and show_hierarchy
     show_rates = options["should_print_rates"] and options["doc_type"] != "UNPRICEDBILLOFQUANTITIES"
+    # See the rounding policy in typst/common.typ. When on, the live formulas
+    # round each product before the =SUM()s add them, so the sheet recomputes
+    # the same figures the PDF prints. When off, the raw full-precision
+    # arithmetic is kept, matching Bonsai's cost panel.
+    round_values = options.get("should_eval_rounded_values", True)
+
+    def _round(x):
+        return round(x, QTY_PLACES) if round_values else x
+
+    def _mult_formula(cell1, cell2):
+        raw = "{}*{}".format(cell1, cell2)
+        return "=ROUND({};{})".format(raw, MONEY_PLACES) if round_values else "=" + raw
     currency = options.get("currency", "")
 
     sheet_name = "Bill of Quantities"
@@ -396,7 +413,7 @@ def build_bill_of_quantities(doc, rows, options):
                 money_bold = styles.cell_style(
                     data_style=styles.money_style_name, bg=SECTION_BG, bold=True, halign="end"
                 )
-                total_cell = sheet.num_cell(r, _safe_float(row.get("TotalPrice")), money_bold)
+                total_cell = sheet.num_cell(r, _round(_safe_float(row.get("TotalPrice"))), money_bold)
             row_id = row.get("Id", "")
             if row_id:
                 id_to_addr[row_id] = addr("Total", sheet.row_num) if show_rates else None
@@ -430,21 +447,23 @@ def build_bill_of_quantities(doc, rows, options):
             if quantities:
                 sub_addrs = [addr("Quantity", main_row_num + i) for i in range(1, len(quantities) + 1)]
                 qty_formula = "=SUM({})".format(",".join(sub_addrs))
-                qty_value = sum(_safe_float(q[1]) for q in quantities)
+                # Sum of the rounded sub-quantities, matching the =SUM over the
+                # rounded sub-rows written below, so the column adds up by hand.
+                qty_value = sum(_round(_safe_float(q[1])) for q in quantities)
                 sheet.num_cell(r, qty_value, qty_style, formula=qty_formula)
             else:
-                qty_value = _safe_float(row.get("Quantity"))
+                qty_value = _round(_safe_float(row.get("Quantity")))
                 sheet.num_cell(r, qty_value, qty_style)
             sheet.text_cell(r, [(fmt_unit(row.get("Unit", "")), False, False, None)], styles)
 
             total_addr = None
             if show_rates:
-                rate_value = _safe_float(row.get("RateSubtotal"))
+                rate_value = _round(_safe_float(row.get("RateSubtotal")))
                 money_style = styles.cell_style(data_style=styles.money_style_name, halign="end")
                 sheet.num_cell(r, rate_value, money_style)
-                total_formula = "={}*{}".format(addr("Quantity", main_row_num), addr("Rate", main_row_num))
+                total_formula = _mult_formula(addr("Quantity", main_row_num), addr("Rate", main_row_num))
                 money_bold = styles.cell_style(data_style=styles.money_style_name, bold=True, halign="end")
-                sheet.num_cell(r, qty_value * rate_value, money_bold, formula=total_formula)
+                sheet.num_cell(r, _round(qty_value * rate_value), money_bold, formula=total_formula)
                 total_addr = addr("Total", main_row_num)
 
             row_id = row.get("Id", "")
@@ -454,7 +473,7 @@ def build_bill_of_quantities(doc, rows, options):
             # Measurement breakdown sub-rows.
             for q in quantities:
                 qname = "" if q[0] == "Unnamed" else (q[0] or "")
-                qvalue = _safe_float(q[1])
+                qvalue = _round(_safe_float(q[1]))
                 formula_text = q[2] if len(q) > 2 else ""
                 sr = sheet.new_row()
                 sheet.empty_cell(sr)

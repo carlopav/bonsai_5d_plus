@@ -35,6 +35,127 @@
   format-decimal(num, places: 2) + (if currency != "" { " " + currency } else { "" })
 }
 
+// — Rounding policy —
+// A printed cost document has to be checkable with a calculator: every figure
+// must be recomputable from the figures printed above it. That only holds if
+// the sums are taken over the *rounded* values, which is why the rounding
+// happens here — early, on the way in — rather than at the point where each
+// number is finally formatted.
+//
+// Summing rounded values is not the same as rounding the sum: three rows of
+// 0.005 each print as 0.01 and add up to 0.03, while the raw sum 0.015 rounds
+// to 0.02. Only the first can be reproduced by hand, so it is the one used.
+//
+// The formula printed beside a measurement row is deliberately exempt:
+// "3.70*6.81" evaluates to 25.197 while the row prints 25.20. The formula
+// documents how the measure was obtained; it is the column that has to add up.
+//
+// Nothing here is written back to IFC: the stored values keep their full
+// precision, as Bonsai writes them. This is presentation only.
+//
+// Every entry point takes `rounded`, wired to the export option
+// `should_eval_rounded_values` (on by default). Turning it off restores the
+// raw full-precision arithmetic — the same figures Bonsai's own cost panel
+// shows — which is what to compare against when a total needs explaining.
+
+#let QTY_PLACES = 2
+#let MONEY_PLACES = 2
+
+#let round-qty(x) = calc.round(float(x), digits: QTY_PLACES)
+#let round-money(x) = calc.round(float(x), digits: MONEY_PLACES)
+
+// CSV cells are strings and an unmeasured item leaves them empty.
+#let num-or-zero(row, key) = {
+  let raw = row.at(key, default: "")
+  if raw == "" { 0.0 } else { float(raw) }
+}
+
+// A cost item's measurement rows, as (name, value, formula) triples.
+#let row-quantities(row) = {
+  let raw = row.at("Quantities", default: "")
+  if raw == "" { () } else { json.decode(raw) }
+}
+
+// A cost item's quantity: the sum of its rounded measurement rows, so the
+// Quantity column always adds up to the breakdown printed under it. Computed
+// this way even when the breakdown is hidden, so that switching a print option
+// never changes a total. Items measured without a breakdown fall back to the
+// ifc5d figure.
+#let row-quantity(row, rounded: true) = {
+  if not rounded { return num-or-zero(row, "Quantity") }
+  let qs = row-quantities(row)
+  if qs.len() == 0 {
+    round-qty(num-or-zero(row, "Quantity"))
+  } else {
+    qs.map(q => round-qty(q.at(1))).sum(default: 0.0)
+  }
+}
+
+#let row-rate(row, rounded: true) = {
+  let v = num-or-zero(row, "RateSubtotal")
+  if rounded { round-money(v) } else { v }
+}
+
+#let row-total(row, rounded: true) = {
+  let v = row-quantity(row, rounded: rounded) * row-rate(row, rounded: rounded)
+  if rounded { round-money(v) } else { v }
+}
+
+// Section subtotals: `Id -> total`, each the sum of the rounded totals of the
+// leaf items below it. Deliberately not ifc5d's "TotalPrice", which comes from
+// the "*" cost value — i.e. from ifcopenshell's full-precision recursive sum —
+// and so would not match the rows printed above it.
+//
+// The CSV rows are flat, with "Index" carrying the depth (root = 1), so one
+// forward pass suffices: keep the currently open summary at each depth and let
+// every leaf add itself to all of them.
+// When rounded is off, a summary keeps ifc5d's own "TotalPrice" (the "*" cost
+// value, ifcopenshell's full-precision recursive sum) so the document matches
+// Bonsai's cost panel exactly.
+#let section-totals(data, rounded: true) = {
+  if not rounded {
+    let totals = (:)
+    for row in data {
+      if row.at("ItemIsASum") == "True" {
+        totals.insert(row.at("Id", default: ""), num-or-zero(row, "TotalPrice"))
+      }
+    }
+    return totals
+  }
+  let totals = (:)
+  let open = ()  // open.at(d - 1) = Id of the summary row open at depth d
+  for row in data {
+    let depth = int(row.at("Index", default: "1"))
+    if row.at("ItemIsASum") == "True" {
+      open = open.slice(0, calc.min(depth - 1, open.len()))
+      while open.len() < depth - 1 { open.push(none) }
+      open.push(row.at("Id", default: ""))
+      totals.insert(row.at("Id", default: ""), 0.0)
+    } else {
+      let t = row-total(row)
+      for id in open {
+        if id != none and id != "" {
+          totals.insert(id, totals.at(id, default: 0.0) + t)
+        }
+      }
+    }
+  }
+  totals
+}
+
+// Grand total: the sum of the top-level rows, so the summary page adds up to
+// exactly the sections listed on it.
+#let general-total(data, totals, rounded: true) = {
+  data
+    .filter(row => int(row.at("Index", default: "1")) == 1)
+    .map(row => if row.at("ItemIsASum") == "True" {
+      totals.at(row.at("Id", default: ""), default: 0.0)
+    } else {
+      row-total(row, rounded: rounded)
+    })
+    .sum(default: 0.0)
+}
+
 // IFC unit Name → printable symbol. Keys cover both the verbose form produced
 // by ifc5d's format_unit ("<UnitType> / <Prefix> <Name>", we map the part after
 // " / ") and the compact symbols produced by ifcopenshell's get_unit_symbol

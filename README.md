@@ -93,6 +93,8 @@ Esporta i documenti di costo direttamente dalla sidebar, senza passare per tool 
 
 **Export Schedule to ODS** — Stessa esportazione ma in formato **OpenDocument Spreadsheet**, con formule di calcolo live (non solo valori statici): stesse opzioni del PDF (tipo documento, rinumerazione gerarchica, profondità struttura, colonna Identification nella Description, ecc.), utile per continuare a lavorare sul computo in LibreOffice Calc.
 
+Entrambi gli export condividono l'opzione **Round Values Before Summing** (attiva di default), che rende il documento ripercorribile a mano — vedi [Arrotondamenti e ripercorribilità a mano](#arrotondamenti-e-ripercorribilità-a-mano).
+
 **Export Rate Analysis to PDF** — Stampa la **scheda analisi prezzi** della voce attiva (item pinnato nell'editor oppure item selezionato nel pannello Bonsai). I dati vengono letti **direttamente dall'IFC**, non dalla UI, quindi non è necessario aver caricato la voce nell'editor prima di esportare. **Export All Rate Analyses to PDF** esporta in un unico PDF tutte le voci con analisi prezzi presenti nello schedule attivo.
 
 L'impaginazione segue la scheda "nuovo prezzo":
@@ -152,6 +154,25 @@ Bonsai5D+ tratta l'unità di misura come **entità IFC esplicita** (`IfcSIUnit` 
 - Nel Cost Item Editor i due picker — unità del **prezzo** (Fixed/Rate Analysis) e unità delle **Quantities** (libretto delle misure) — sono **volutamente indipendenti**: le quantità possono arrivare da una fonte diversa dal prezzo (import da prezzario, take-off geometrico, file precedenti) e non vengono mai forzate a coincidere. Al caricamento il picker delle Quantities riflette l'unità realmente salvata su ogni quantità; solo per un item senza quantità propone quella del prezzo come suggerimento iniziale.
 - **Not battle tested**: introdotto nella sessione del 2026-07-17. Copre quantità legacy senza `.Unit` salvate da versioni precedenti dell'addon, cost item con sole quantità e nessun cost value, ed export BoQ con unità di prezzo e quantità divergenti, ma manca ancora l'uso prolungato su dati reali.
 - **Limite noto, non ancora risolto**: nessuna **conversione di fattore** tra unità diverse (es. prezzario in dm², progetto IFC in m²). Il prezzo deve già essere espresso nell'unità corretta al momento dell'assegnazione della tariffa; l'addon non applica alcun fattore di conversione automatico.
+
+---
+
+## Arrotondamenti e ripercorribilità a mano
+
+Un documento di costo consegnato dev'essere **verificabile con la calcolatrice**: ogni numero stampato dev'essere ricalcolabile dai numeri stampati sopra di esso. Questo vale solo se le somme sono prese sui valori **già arrotondati**, non sul valore a piena precisione poi arrotondato in fase di stampa.
+
+**Due fronti distinti:**
+
+- **Dati salvati in IFC** — allineati allo standard Bonsai: **precisione piena, nessun arrotondamento semantico**, import compreso. Bonsai (`ifcopenshell.util.cost`) scrive e somma i valori verbatim; l'unico arrotondamento nella sua UI è di visualizzazione. Bonsai5D+ fa lo stesso: le `IfcQuantity` e gli `IfcCostValue.AppliedValue` conservano il valore della fonte (il parser dei prezzari ripulisce solo il rumore float a 6 decimali, che è igiene numerica, non una policy di precisione).
+- **Output PDF/ODS** — arrotondamento "presto": ogni quantità e ogni importo viene arrotondato **prima** di essere sommato, così il totale di una colonna è la somma delle cifre stampate in quella colonna.
+
+**Convenzione di precisione:** fattori atomici del libretto (NR × L × B × H) a **3 decimali**; parziale di misura, quantità totale, prezzi e importi a **2 decimali**. La somma delle sotto-misure usa i parziali arrotondati (tre righe da 0,005 → 0,01 + 0,01 + 0,01 = 0,03, non 0,015 → 0,02): è la sola forma ripercorribile a mano.
+
+**Cosa resta tollerato:** la **formula** stampata accanto a un parziale (es. `3,70*6,81` = 25,197 mentre la riga mostra 25,20) documenta come è stata ottenuta la misura; è la colonna a dover tornare, non l'eval della formula. Anche l'analisi prezzi mantiene i suoi prezzi unitari derivati a piena precisione.
+
+**Opzione di export `Round Values Before Summing`** (finestra di dialogo PDF e ODS, **attiva di default**): spenta, ripristina l'aritmetica grezza a piena precisione — le stesse cifre del pannello Cost nativo di Bonsai — utile per confrontare quando un totale va spiegato. Nel PDF i subtotali di sezione tornano allora al `TotalPrice` di ifc5d; nell'ODS le formule vive passano da `=ROUND(qta*prezzo;2)` a `=qta*prezzo`.
+
+**⚠️ Limite strutturale, accettato:** con l'arrotondamento attivo le **quantità** tornano ovunque, Bonsai nativo compreso, mentre gli **importi di sezione** possono scostarsi di qualche centesimo dal pannello di Bonsai — che somma i prodotti `qta × prezzo` a piena precisione. Non è aggirabile: `ifcopenshell.util.cost.calculate_applied_value` ignora l'`AppliedValue` memorizzato e ricalcola sempre da zero per le voci con figli, quindi non c'è modo di far arrotondare i totali a Bonsai. L'elaborato consegnato dev'essere ripercorribile a mano; il pannello di Bonsai resta uno strumento di lavoro. I file IFC preesistenti (quantità a più decimali) stampano comunque coerenti, perché l'arrotondamento è applicato in lettura.
 
 ---
 
@@ -245,7 +266,7 @@ blender.exe --background --python tools/generate_classifications.py
 
 - **Prints Manager** — document export for cost data, powered by [Typst](https://typst.app) for PDFs; generated files open automatically:
   - *Export Schedule to PDF*: renders the active `IfcCostSchedule` to PDF via `Ifc5DPdfWriter` (ifc5d / IfcOpenShell) with configurable options (document type, rates visibility, quantity breakdown, summary page, cover).
-  - *Export Schedule to ODS*: the same export as an **OpenDocument Spreadsheet** with live calculation formulas (not static values) — same options as the PDF — so the schedule stays editable in LibreOffice Calc.
+  - *Export Schedule to ODS*: the same export as an **OpenDocument Spreadsheet** with live calculation formulas (not static values) — same options as the PDF — so the schedule stays editable in LibreOffice Calc. Both exports share the **Round Values Before Summing** option (on by default) that makes the document hand-checkable — see [Rounding and hand-checkability](#rounding-and-hand-checkability).
   - *Export Rate Analysis to PDF*: generates a **scheda analisi prezzi** for the active cost item. Data is read **directly from the IFC file** (not from the UI state), so no prior loading in the Cost Item Editor is required. *Export All Rate Analyses to PDF* does the same for every rate-analysis item in the active schedule, in a single PDF.
 
     The sheet follows the "nuovo prezzo" worksheet: components grouped by category with a subtotal per group, the technical total, the compounding markups, then — **only when there are any** — the price-list items that already include those markups in their own section with a subtotal, then a total of everything, rounding, and the final price. Each percentage spells out **the amount it is taken on** (`Spese generali 14,0% di 545,19`), so the compounding is verifiable line by line. Components show their price-list code ahead of the name when linked to a rate. The **Show Component Descriptions** flag (export dialog, **off by default**) adds each component's extended description below its name — the source price-list item's for linked components, its own for free-form ones; off, each component takes a single line. The final price carries the item's unit of measure, and an undefined unit prints `-`.
@@ -268,5 +289,22 @@ Bonsai5D+ treats the unit of measure as an **explicit IFC entity** (`IfcSIUnit` 
 - In the Cost Item Editor, the **price** unit picker (Fixed/Rate Analysis) and the **Quantities** unit picker (measurement book) are **deliberately independent**: quantities may come from a different source than the price (price-list import, geometric takeoff, a previous file) and are never forced to match. On load, the Quantities picker reflects whatever unit is actually stored on the item's quantities; it only suggests the price's unit as a starting point for an item with no quantities yet.
 - **Not battle tested**: introduced in the 2026-07-17 session. Covers legacy quantities with no `.Unit` written by older addon versions, cost items with quantities but no cost value, and BoQ export with diverging price/quantity units, but still lacks extended use against real-world data.
 - **Known, unresolved limitation**: no **conversion factor** between different units (e.g. a price list in dm², IFC project in m²). The price must already be expressed in the correct unit when the rate is assigned; the addon applies no automatic conversion factor.
+
+### Rounding and hand-checkability
+
+A delivered cost document must be **checkable with a calculator**: every printed figure must be recomputable from the figures printed above it. That only holds if sums are taken over the **already-rounded** values, not over the full-precision value rounded at print time.
+
+**Two distinct fronts:**
+
+- **Data stored in IFC** — aligned with the Bonsai standard: **full precision, no semantic rounding**, import included. Bonsai (`ifcopenshell.util.cost`) writes and sums values verbatim; the only rounding in its UI is for display. Bonsai5D+ does the same — `IfcQuantity` values and `IfcCostValue.AppliedValue` keep the source figure (the price-list parser only trims float noise to 6 places, which is numeric hygiene, not a precision policy).
+- **PDF/ODS output** — rounded early: every quantity and amount is rounded **before** it is summed, so a column's total is the sum of the figures printed in it.
+
+**Precision convention:** measurement-book atomic factors (NR × L × B × H) at **3 decimals**; measurement partial, total quantity, prices and amounts at **2 decimals**. A row's quantity is the sum of its rounded sub-measurements (three rows of 0.005 → 0.01 + 0.01 + 0.01 = 0.03, not 0.015 → 0.02): the only form that reproduces by hand.
+
+**What stays tolerated:** the **formula** printed beside a partial (e.g. `3.70*6.81` = 25.197 while the row shows 25.20) documents how the measure was obtained; it is the column that must add up, not the formula's eval. Rate analysis likewise keeps its derived unit prices at full precision.
+
+**Export option `Round Values Before Summing`** (PDF and ODS dialog, **on by default**): turn it off to restore the raw full-precision arithmetic — the same figures Bonsai's own Cost panel shows — for comparison when a total needs explaining. In the PDF, section subtotals then fall back to ifc5d's `TotalPrice`; in the ODS the live formulas switch from `=ROUND(qty*rate;2)` to `=qty*rate`.
+
+**⚠️ Structural limit, accepted:** with rounding on, **quantities** reconcile everywhere, Bonsai's native panel included, but **section amounts** may differ by a few cents from Bonsai's panel — which sums the `qty × rate` products at full precision. This is not avoidable: `ifcopenshell.util.cost.calculate_applied_value` ignores the stored `AppliedValue` and always recomputes from scratch for items with children, so there is no way to make Bonsai round its totals. The delivered document must be hand-checkable; Bonsai's panel stays a working tool. Pre-existing IFC files (quantities at more decimals) still print consistently, because the rounding is applied on read.
 
 **Requirements:** Blender 4.0+ and a recent Bonsai BIM **daily/alpha build from 2026-06-17 onward** (`alpha260617+`). PDF export of the bill of quantities relies on the `ifc5d` fixes merged into ifcopenshell on 2026-06-16 ([#8175](https://github.com/IfcOpenShell/IfcOpenShell/pull/8175) escape quantity names, [#8176](https://github.com/IfcOpenShell/IfcOpenShell/pull/8176) include the quantity formula); with older builds the BoQ print fails with a JSON parsing error.

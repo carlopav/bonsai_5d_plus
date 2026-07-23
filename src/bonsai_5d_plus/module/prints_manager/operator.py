@@ -230,6 +230,24 @@ def _extract_schedule_csv(context, should_print_hierarchy, hierarchy_start_level
     }
 
 
+# Shared across the PDF and ODS exporters. A cost document has to be checkable
+# with a calculator, so by default every quantity and money figure is rounded
+# before it is summed — the total of a column is the sum of the (rounded)
+# figures printed in it. Turning this off restores the raw full-precision
+# arithmetic, i.e. exactly what Bonsai's own cost panel shows, which is what to
+# compare against when a total needs explaining. Never writes to IFC.
+_ROUNDED_VALUES_PROP = {
+    "name": "Round Values Before Summing",
+    "description": (
+        "Round each quantity and amount before adding it up, so every total "
+        "equals the sum of the figures printed above it and the document can "
+        "be checked by hand. Turn off to reproduce Bonsai's full-precision "
+        "figures instead. Does not modify the IFC file"
+    ),
+    "default": True,
+}
+
+
 class ExportScheduleToPdfOperator(bpy.types.Operator):
     """Export the active Cost Schedule to PDF using the ifc5d Typst template."""
     bl_idname = "bim.export_schedule_to_pdf"
@@ -256,6 +274,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
     should_print_qty_decomposition: bpy.props.BoolProperty(name="Show Quantity Decomposition", default=False)
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Page",       default=True)
     should_print_cover:          bpy.props.BoolProperty(name="Show Cover Page",         default=False)
+    should_eval_rounded_values:  bpy.props.BoolProperty(**_ROUNDED_VALUES_PROP)
     should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
     hierarchy_start_level:       bpy.props.IntProperty(
         name="Renumber From Level",
@@ -309,6 +328,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
         col.prop(self, "should_print_qty_decomposition")
         col.prop(self, "should_print_summary")
         col.prop(self, "should_print_cover")
+        col.prop(self, "should_eval_rounded_values")
         col.prop(self, "should_print_hierarchy")
         sub = col.column(align=True)
         sub.enabled = self.should_print_hierarchy
@@ -381,6 +401,7 @@ class ExportScheduleToPdfOperator(bpy.types.Operator):
                 should_print_each_quantity=self.should_print_each_quantity,
                 should_print_qty_decomposition=self.should_print_qty_decomposition,
                 should_print_summary=self.should_print_summary,
+                should_eval_rounded_values=self.should_eval_rounded_values,
                 # Unpriced BoQ hides the rate/total columns.
                 should_print_rates=self.should_print_rates and doc_type != "UNPRICEDBILLOFQUANTITIES",
                 **common,
@@ -422,6 +443,7 @@ class ExportScheduleToOdsOperator(bpy.types.Operator):
     should_print_each_quantity:  bpy.props.BoolProperty(name="Show Quantity Breakdown", default=True)
     should_print_qty_decomposition: bpy.props.BoolProperty(name="Show Quantity Decomposition", default=False)
     should_print_summary:        bpy.props.BoolProperty(name="Show Summary Sheet",      default=True)
+    should_eval_rounded_values:  bpy.props.BoolProperty(**_ROUNDED_VALUES_PROP)
     should_print_hierarchy:      bpy.props.BoolProperty(name="Hierarchy Renumbering",   default=False)
     hierarchy_start_level:       bpy.props.IntProperty(
         name="Renumber From Level",
@@ -465,6 +487,7 @@ class ExportScheduleToOdsOperator(bpy.types.Operator):
         col.prop(self, "should_print_each_quantity")
         col.prop(self, "should_print_qty_decomposition")
         col.prop(self, "should_print_summary")
+        col.prop(self, "should_eval_rounded_values")
         col.prop(self, "should_print_hierarchy")
         sub = col.column(align=True)
         sub.enabled = self.should_print_hierarchy
@@ -517,6 +540,7 @@ class ExportScheduleToOdsOperator(bpy.types.Operator):
             should_print_each_quantity=self.should_print_each_quantity,
             should_print_qty_decomposition=self.should_print_qty_decomposition,
             should_print_summary=self.should_print_summary,
+            should_eval_rounded_values=self.should_eval_rounded_values,
             should_print_hierarchy=self.should_print_hierarchy,
             should_move_identification=move_identification,
             title=project_name,

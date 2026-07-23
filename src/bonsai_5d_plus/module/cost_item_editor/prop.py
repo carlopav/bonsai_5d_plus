@@ -63,10 +63,10 @@ class RateAnalysisComponent(bpy.types.PropertyGroup):
 class MeasureRow(bpy.types.PropertyGroup):
     """Single row of a libretto-delle-misure measurement table."""
     qty_desc: bpy.props.StringProperty(name="Description", options={'SKIP_SAVE'})
-    qty_nr: bpy.props.FloatProperty(name="NR", precision=2, options={'SKIP_SAVE'})
-    qty_l: bpy.props.FloatProperty(name="L", precision=2, options={'SKIP_SAVE'})
-    qty_b: bpy.props.FloatProperty(name="B", precision=2, options={'SKIP_SAVE'})
-    qty_h: bpy.props.FloatProperty(name="H", precision=2, options={'SKIP_SAVE'})
+    qty_nr: bpy.props.FloatProperty(name="NR", precision=3, options={'SKIP_SAVE'})
+    qty_l: bpy.props.FloatProperty(name="L", precision=3, options={'SKIP_SAVE'})
+    qty_b: bpy.props.FloatProperty(name="B", precision=3, options={'SKIP_SAVE'})
+    qty_h: bpy.props.FloatProperty(name="H", precision=3, options={'SKIP_SAVE'})
     ifc_id: bpy.props.IntProperty(name="IFC ID", default=0, options={'SKIP_SAVE'})
     is_selected: bpy.props.BoolProperty(name="Selected", default=False, options={'SKIP_SAVE'})
 
