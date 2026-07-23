@@ -32,11 +32,16 @@
   if total == 0.0 { "0.0%" } else { format-decimal(labor / total * 100.0, places: 1) + "%" }
 }
 
-#let _num(row, key) = { let v = row.at(key, default: ""); if v == "" { 0.0 } else { float(v) } }
-
-// Per-leaf line cost and labor cost, derived from the ifc5d CSV columns.
-#let leaf-total(row) = _num(row, "Quantity") * _num(row, "RateSubtotal")
-#let leaf-labor(row) = _num(row, "Quantity") * _num(row, "Labor Cost")
+// Per-leaf labor cost from the ifc5d CSV: the rounded quantity times the
+// per-unit "Labor Cost", rounded (see the rounding policy in common.typ), so the
+// labor column adds up by hand. With rounding off, the raw full-precision
+// arithmetic is kept, matching Bonsai. The *total* cost column has no such local
+// helper on purpose — it reuses the bill of quantities' row-total, so the two
+// documents agree figure for figure.
+#let leaf-labor(row, rounded: true) = {
+  if rounded { round-money(row-quantity(row) * round-money(num-or-zero(row, "Labor Cost"))) }
+  else { num-or-zero(row, "Quantity") * num-or-zero(row, "Labor Cost") }
+}
 
 // — Page frame (drawn in the page background). Widths sum to 185mm. —
 #let labor_frame(currency: "") = table(
@@ -90,8 +95,9 @@
     let description = if options.at("should_print_description") == true and row.at("Description") != "" {
       [#par(justify: true, text(8pt, row.at("Description", default: "")))]
     } else { "" }
+    let rounded = options.at("should_eval_rounded_values", default: true)
     let quant = if row.at("Quantity", default: "") == "" { [] } else {
-      [#format-decimal(float(row.at("Quantity"))) #fmt-unit(row.at("Unit", default: ""))]
+      [#format-decimal(row-quantity(row, rounded: rounded)) #fmt-unit(row.at("Unit", default: ""))]
     }
     (
       id-cell(row, options.at("should_print_hierarchy")),
@@ -106,21 +112,22 @@
 
 #let create-schedule(path, options) = {
   let data = csv(path, row-type: dictionary)
-  let leaves = data.filter(row => row.at("ItemIsASum") == "False")
+  let rounded = options.at("should_eval_rounded_values", default: true)
 
-  // A section's amounts are the sum of its leaf descendants (hierarchy prefix).
-  let aggregate(h) = {
-    let ls = leaves.filter(row => row.at("Hierarchy").starts-with(h + "."))
-    (ls.map(leaf-total).sum(default: 0.0), ls.map(leaf-labor).sum(default: 0.0))
-  }
+  // Total-cost column reuses the BoQ's own roll-up (section-totals / row-total),
+  // so every figure — item, section, grand total — equals the bill of quantities
+  // for the same schedule, in both rounding modes. The labor column has no BoQ
+  // counterpart, so it is summed the same way over its rounded leaves.
+  let total_by_id = section-totals(data, rounded: rounded)
+  let labor_by_id = section-sums(data, r => leaf-labor(r, rounded: rounded))
 
   let new_rows = ()
   for row in data {
     if row.at("ItemIsASum") == "True" {
-      let (t, l) = aggregate(row.at("Hierarchy"))
-      new_rows += arrange_labor_row(row, options, t, l)
+      let id = row.at("Id", default: "")
+      new_rows += arrange_labor_row(row, options, total_by_id.at(id, default: 0.0), labor_by_id.at(id, default: 0.0))
     } else {
-      new_rows += arrange_labor_row(row, options, leaf-total(row), leaf-labor(row))
+      new_rows += arrange_labor_row(row, options, row-total(row, rounded: rounded), leaf-labor(row, rounded: rounded))
     }
   }
 
@@ -133,12 +140,11 @@
 }
 
 // One summary row per chapter (section), with its aggregated incidence.
-#let arrange_labor_summary_row(row, leaves, show_hierarchy) = {
+#let arrange_labor_summary_row(row, total_by_id, labor_by_id, show_hierarchy) = {
   if row.at("ItemIsASum") == "True" {
-    let h = row.at("Hierarchy")
-    let ls = leaves.filter(r => r.at("Hierarchy").starts-with(h + "."))
-    let total = ls.map(leaf-total).sum(default: 0.0)
-    let labor = ls.map(leaf-labor).sum(default: 0.0)
+    let id = row.at("Id", default: "")
+    let total = total_by_id.at(id, default: 0.0)
+    let labor = labor_by_id.at(id, default: 0.0)
     if row.at("Index") == "1" {
       // ROOT CHAPTER
       (
@@ -163,12 +169,14 @@
   }
 }
 
-#let create-summary(path, show_hierarchy) = {
+#let create-summary(path, show_hierarchy, rounded) = {
   let data = csv(path, row-type: dictionary)
-  let leaves = data.filter(row => row.at("ItemIsASum") == "False")
-  let new_rows = data.map(item => arrange_labor_summary_row(item, leaves, show_hierarchy))
-  let tot_total = leaves.map(leaf-total).sum(default: 0.0)
-  let tot_labor = leaves.map(leaf-labor).sum(default: 0.0)
+  let total_by_id = section-totals(data, rounded: rounded)
+  let labor_by_id = section-sums(data, r => leaf-labor(r, rounded: rounded))
+  let new_rows = data.map(item => arrange_labor_summary_row(item, total_by_id, labor_by_id, show_hierarchy))
+  // Same top-level roll-up as the BoQ grand total, so the two documents agree.
+  let tot_total = general-total(data, total_by_id, row => row-total(row, rounded: rounded))
+  let tot_labor = general-total(data, labor_by_id, r => leaf-labor(r, rounded: rounded))
 
   set text(size: 10pt)
   pad(left: 2cm)[SUMMARY:]
@@ -211,6 +219,7 @@
   should_print_hierarchy: false,
   should_print_description: false,
   should_print_summary: true,
+  should_eval_rounded_values: true,
   body,
 ) = {
   set text(font: template_fonts, size: 8pt, lang: "en")
@@ -235,6 +244,7 @@
     "nested_structure_depth": nested_structure_depth,
     "should_print_hierarchy": should_print_hierarchy,
     "should_print_description": should_print_description,
+    "should_eval_rounded_values": should_eval_rounded_values,
   )
 
   create-schedule(schedule_path, options)
@@ -242,7 +252,7 @@
   if should_print_summary {
     pagebreak()
     set page(background: place(top + left, dx: 15mm, dy: 25mm, labor_summary_frame(currency: project_currency)))
-    create-summary(schedule_path, should_print_hierarchy)
+    create-summary(schedule_path, should_print_hierarchy, should_eval_rounded_values)
   }
 
   body

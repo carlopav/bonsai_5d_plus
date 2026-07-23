@@ -580,6 +580,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
         default=0, min=0,
     )
     should_print_summary:     bpy.props.BoolProperty(name="Show Summary Page",   default=True)
+    should_eval_rounded_values: bpy.props.BoolProperty(**_ROUNDED_VALUES_PROP)
     nested_structure_depth:   bpy.props.IntProperty( name="Max Depth (0 = all)", default=0, min=0)
 
     @classmethod
@@ -597,6 +598,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
         col = layout.column(align=True)
         col.prop(self, "should_print_description")
         col.prop(self, "should_print_cover")
+        col.prop(self, "should_eval_rounded_values")
         col.prop(self, "should_print_hierarchy")
         sub = col.column(align=True)
         sub.enabled = self.should_print_hierarchy
@@ -682,6 +684,7 @@ class ExportLaborCostBreakdownToPdfOperator(bpy.types.Operator):
             should_print_hierarchy=self.should_print_hierarchy,
             should_print_description=self.should_print_description,
             should_print_summary=self.should_print_summary,
+            should_eval_rounded_values=self.should_eval_rounded_values,
         )
 
         try:

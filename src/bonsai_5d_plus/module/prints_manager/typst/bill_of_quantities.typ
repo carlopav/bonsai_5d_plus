@@ -354,7 +354,7 @@
   let totals = section-totals(data, rounded: rounded)
   let new_rows = data.map(item => arrange_summary_row(item, options, totals))
   // Sum of the top-level rows, so the page adds up to the sections listed on it.
-  let general_total = general-total(data, totals, rounded: rounded)
+  let general_total = general-total(data, totals, row => row-total(row, rounded: rounded))
 
   set text(size: 10pt)
   pad(left: 2cm)[SUMMARY:]

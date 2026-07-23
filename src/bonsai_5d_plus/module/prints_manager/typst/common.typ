@@ -91,22 +91,15 @@
   if rounded { round-money(v) } else { v }
 }
 
-// Section subtotals: `Id -> total`, each the sum of the rounded totals of the
-// leaf items below it — not ifc5d's "TotalPrice" (the "*" cost value, a
-// full-precision recursive sum), which wouldn't match the rows printed above.
-// The CSV is flat with "Index" as depth (root = 1): one pass, keeping the open
-// summary at each depth and letting each leaf add itself to all of them.
-// With rounding off, keep ifc5d's TotalPrice so the document matches Bonsai.
-#let section-totals(data, rounded: true) = {
-  if not rounded {
-    let totals = (:)
-    for row in data {
-      if row.at("ItemIsASum") == "True" {
-        totals.insert(row.at("Id", default: ""), num-or-zero(row, "TotalPrice"))
-      }
-    }
-    return totals
-  }
+// Section subtotals for an arbitrary per-leaf amount: `Id -> sum`, each summary
+// getting the sum of `leaf-amount` over the leaves below it. The CSV is flat
+// with "Index" as depth (root = 1): one pass, keeping the open summary at each
+// depth and letting each leaf add itself to all its open ancestors.
+//
+// Kept generic so the labor breakdown can roll up its two columns with exactly
+// this machinery, guaranteeing its section and grand totals match the bill of
+// quantities row for row.
+#let section-sums(data, leaf-amount) = {
   let totals = (:)
   let open = ()  // open.at(d - 1) = Id of the summary row open at depth d
   for row in data {
@@ -117,7 +110,7 @@
       open.push(row.at("Id", default: ""))
       totals.insert(row.at("Id", default: ""), 0.0)
     } else {
-      let t = row-total(row)
+      let t = leaf-amount(row)
       for id in open {
         if id != none and id != "" {
           totals.insert(id, totals.at(id, default: 0.0) + t)
@@ -128,15 +121,34 @@
   totals
 }
 
-// Grand total: the sum of the top-level rows, so the summary page adds up to
-// exactly the sections listed on it.
-#let general-total(data, totals, rounded: true) = {
+// Section subtotals for the bill of quantities: the rounded leaf totals summed
+// bottom-up — not ifc5d's "TotalPrice" (the "*" cost value, a full-precision
+// recursive sum), which wouldn't match the rows printed above. With rounding
+// off, keep ifc5d's TotalPrice so the document matches Bonsai.
+#let section-totals(data, rounded: true) = {
+  if not rounded {
+    let totals = (:)
+    for row in data {
+      if row.at("ItemIsASum") == "True" {
+        totals.insert(row.at("Id", default: ""), num-or-zero(row, "TotalPrice"))
+      }
+    }
+    return totals
+  }
+  section-sums(data, row => row-total(row))
+}
+
+// Grand total from a section-sums/section-totals dict: the sum of the top-level
+// rows, so the summary page adds up to exactly the sections listed on it. The
+// per-leaf `amount` must be the same function used to build `totals`, so a
+// top-level leaf is counted consistently with the sections.
+#let general-total(data, totals, amount) = {
   data
     .filter(row => int(row.at("Index", default: "1")) == 1)
     .map(row => if row.at("ItemIsASum") == "True" {
       totals.at(row.at("Id", default: ""), default: 0.0)
     } else {
-      row-total(row, rounded: rounded)
+      amount(row)
     })
     .sum(default: 0.0)
 }
