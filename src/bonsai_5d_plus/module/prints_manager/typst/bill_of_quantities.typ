@@ -217,9 +217,8 @@
     } else { "" }
     let unit_str = fmt-unit(row.at("Unit", default: ""))
     let unit = table.cell(align: right)[#if unit_str != "" { unit_str } else { "-" }]
-    // Rounded early and summed from the rounded parts — see the rounding
-    // policy in common.typ. quant_v is the sum of the rounded measurement
-    // rows, so the Quantity column adds up to the breakdown below it.
+    // quant_v/rate_v/total_v are rounded and summed from rounded parts — see
+    // the rounding policy in common.typ.
     let rounded = options.at("should_eval_rounded_values", default: true)
     let quant_v = row-quantity(row, rounded: rounded)
     let rate_v = row-rate(row, rounded: rounded)

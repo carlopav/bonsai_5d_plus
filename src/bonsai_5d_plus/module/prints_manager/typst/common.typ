@@ -36,27 +36,18 @@
 }
 
 // — Rounding policy —
-// A printed cost document has to be checkable with a calculator: every figure
-// must be recomputable from the figures printed above it. That only holds if
-// the sums are taken over the *rounded* values, which is why the rounding
-// happens here — early, on the way in — rather than at the point where each
-// number is finally formatted.
+// A printed cost document must be checkable by hand: every figure recomputable
+// from the ones above it. So sums are taken over the *rounded* values, rounded
+// early (here), not at final formatting. Summing rounded values ≠ rounding the
+// sum: three rows of 0.005 print as 0.01 and total 0.03, not 0.02.
 //
-// Summing rounded values is not the same as rounding the sum: three rows of
-// 0.005 each print as 0.01 and add up to 0.03, while the raw sum 0.015 rounds
-// to 0.02. Only the first can be reproduced by hand, so it is the one used.
+// The formula beside a row is exempt ("3.70*6.81" = 25.197 vs a printed 25.20):
+// it documents the measure; the column is what has to add up, not the formula.
 //
-// The formula printed beside a measurement row is deliberately exempt:
-// "3.70*6.81" evaluates to 25.197 while the row prints 25.20. The formula
-// documents how the measure was obtained; it is the column that has to add up.
-//
-// Nothing here is written back to IFC: the stored values keep their full
-// precision, as Bonsai writes them. This is presentation only.
-//
-// Every entry point takes `rounded`, wired to the export option
-// `should_eval_rounded_values` (on by default). Turning it off restores the
-// raw full-precision arithmetic — the same figures Bonsai's own cost panel
-// shows — which is what to compare against when a total needs explaining.
+// Presentation only — nothing is written to IFC, which keeps Bonsai's full
+// precision. Every entry point takes `rounded` (export option
+// should_eval_rounded_values, on by default); off restores the raw arithmetic
+// that matches Bonsai's own cost panel.
 
 #let QTY_PLACES = 2
 #let MONEY_PLACES = 2
@@ -77,10 +68,9 @@
 }
 
 // A cost item's quantity: the sum of its rounded measurement rows, so the
-// Quantity column always adds up to the breakdown printed under it. Computed
-// this way even when the breakdown is hidden, so that switching a print option
-// never changes a total. Items measured without a breakdown fall back to the
-// ifc5d figure.
+// Quantity column adds up to the breakdown under it — computed this way even
+// when the breakdown is hidden, so a print option never changes a total. Items
+// with no breakdown fall back to the ifc5d figure.
 #let row-quantity(row, rounded: true) = {
   if not rounded { return num-or-zero(row, "Quantity") }
   let qs = row-quantities(row)
@@ -102,16 +92,11 @@
 }
 
 // Section subtotals: `Id -> total`, each the sum of the rounded totals of the
-// leaf items below it. Deliberately not ifc5d's "TotalPrice", which comes from
-// the "*" cost value — i.e. from ifcopenshell's full-precision recursive sum —
-// and so would not match the rows printed above it.
-//
-// The CSV rows are flat, with "Index" carrying the depth (root = 1), so one
-// forward pass suffices: keep the currently open summary at each depth and let
-// every leaf add itself to all of them.
-// When rounded is off, a summary keeps ifc5d's own "TotalPrice" (the "*" cost
-// value, ifcopenshell's full-precision recursive sum) so the document matches
-// Bonsai's cost panel exactly.
+// leaf items below it — not ifc5d's "TotalPrice" (the "*" cost value, a
+// full-precision recursive sum), which wouldn't match the rows printed above.
+// The CSV is flat with "Index" as depth (root = 1): one pass, keeping the open
+// summary at each depth and letting each leaf add itself to all of them.
+// With rounding off, keep ifc5d's TotalPrice so the document matches Bonsai.
 #let section-totals(data, rounded: true) = {
   if not rounded {
     let totals = (:)
