@@ -805,6 +805,7 @@ def read_rate_analysis_from_ifc(file, cost_item):
     found        = False
     item_unit    = ""
     past_markups = False
+    stored_total = None  # AppliedValue cached on the summary CV, for a stale check
 
     cost_values = list(cost_item.CostValues or [])
     # Nested structure: one summary CV with sub-components
@@ -812,6 +813,7 @@ def read_rate_analysis_from_ifc(file, cost_item):
         summary_cv = cost_values[0]
         _, item_unit = _ra_read_ub(summary_cv)
         item_unit = item_unit or ""
+        stored_total = _ra_val(summary_cv)
         cost_values = list(summary_cv.Components or [])
 
     for cv in cost_values:
@@ -873,6 +875,7 @@ def read_rate_analysis_from_ifc(file, cost_item):
         'overhead':       overhead,
         'profit':         profit,
         'rounding':       rounding,
+        'stored_total':   stored_total,
     }
 
 
@@ -994,6 +997,15 @@ def build_rate_analysis_csv(data, should_print_description=False):
 
     _summary_row('ROUNDING', 'Arrotondamento', rounding)
     _summary_row('TOTAL', 'PREZZO FINALE', final, unit=data.get('unit', ''))
+
+    # The summary CV also caches a total in its AppliedValue, but ifc5d (and the
+    # IFC ADD semantics) define the value as the sum of the components, which is
+    # what `final` and the BoQ use. If the cache disagrees, the analysis was
+    # changed after it was applied and never re-saved through our editor — flag it
+    # rather than trust either number silently. The displayed price stays `final`.
+    stored_total = data.get('stored_total')
+    if stored_total is not None and round(abs(stored_total - final), 2) >= 0.01:
+        _row(['STALE_TOTAL', '', '', '', '', '', '', f"{stored_total:.2f}", f"{final:.2f}"])
 
     return out.getvalue()
 

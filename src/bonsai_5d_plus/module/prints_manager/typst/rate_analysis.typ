@@ -151,6 +151,21 @@
       table.cell(..band, colspan: 2, align: right + horizon)[#strong[#format-decimal(val)]],
     )
 
+  } else if rt == "STALE_TOTAL" {
+    // The summary CV's cached AppliedValue disagrees with the sum of the
+    // components — the analysis was edited after it was applied. The price shown
+    // is the component sum (what the BoQ uses); this red note warns that the
+    // stored total is out of date.
+    let stored = { let v = row.at("unit_price", default: ""); if v == "" { 0.0 } else { float(v) } }
+    let computed = { let v = row.at("line_total", default: ""); if v == "" { 0.0 } else { float(v) } }
+    (
+      table.cell(colspan: 5, inset: (top: 2mm, x: 1.5mm), align: left)[
+        #text(fill: red, size: 7pt)[⚠ Il totale memorizzato sulla voce (#format-decimal(stored)) non
+        corrisponde alla somma dei componenti (#format-decimal(computed)): l'analisi è stata
+        modificata dopo l'applicazione. Il prezzo riportato è la somma dei componenti.]
+      ],
+    )
+
   } else {
     ()
   }
