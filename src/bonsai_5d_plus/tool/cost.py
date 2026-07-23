@@ -686,12 +686,22 @@ def align_item_to_rate(tool, item, with_identification=False):
     return True
 
 
+# Units are shared, project-level entities: a deep copy must reference the
+# same unit entity, never duplicate it. Duplicates bloat the file with
+# near-identical units ("a corpo" twice, HOUR twice…) and, worse, produce
+# unit entities the unit picker doesn't offer until it rescans.
+_SHARED_UNIT_CLASSES = ("IfcNamedUnit", "IfcDerivedUnit", "IfcMonetaryUnit")
+
+
 def detach_shared_cost_values(tool, item):
     """Replace item's CostValues with independent deep copies, so it no
     longer shares IfcCostValue entities with any rate controller."""
     import ifcopenshell.util.element as element_util
     file = tool.Ifc.get()
-    new_values = [element_util.copy_deep(file, cv) for cv in (item.CostValues or [])]
+    new_values = [
+        element_util.copy_deep(file, cv, exclude=_SHARED_UNIT_CLASSES)
+        for cv in (item.CostValues or [])
+    ]
     item.CostValues = new_values if new_values else None
 
 
@@ -703,9 +713,15 @@ def unlink_from_rate(tool, item, copy_info=False):
     ctrl = get_rate_controller(item)
     if ctrl is None:
         return False
+    attrs = {}
     if copy_info:
-        tool.Ifc.run("cost.edit_cost_item", cost_item=item,
-                      attributes={"Name": ctrl.Name, "Description": ctrl.Description})
+        attrs.update({"Name": ctrl.Name, "Description": ctrl.Description})
+    # ObjectType is what marks a rate analysis; without it the detached copy
+    # keeps the analysis' nested cost values but is read back as a flat price.
+    if ctrl.ObjectType == "RATE_ANALYSIS" and item.ObjectType != "RATE_ANALYSIS":
+        attrs["ObjectType"] = "RATE_ANALYSIS"
+    if attrs:
+        tool.Ifc.run("cost.edit_cost_item", cost_item=item, attributes=attrs)
     detach_shared_cost_values(tool, item)
     tool.Ifc.run("control.unassign_control", relating_control=ctrl, related_objects=[item])
     return True

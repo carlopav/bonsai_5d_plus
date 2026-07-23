@@ -354,6 +354,31 @@ def _unit_enum_value_for(unit_entity):
     return str(unit_entity.id())
 
 
+def _set_unit_enum(owner, attr, value):
+    """Assign a unit picker enum value read from IFC, tolerating a unit entity
+    the picker doesn't currently offer.
+
+    The picker's items are the project units plus the units already referenced
+    by some cost value or quantity, and that second scan is cached — an
+    operator that has just created unit entities (or a file changed outside our
+    own operators) can leave a perfectly valid unit out of the items, which
+    Blender rejects with a TypeError. Rescan once, and only then fall back to
+    'NONE': losing a unit label is not a reason to abort the whole load.
+    """
+    try:
+        setattr(owner, attr, value)
+        return True
+    except TypeError:
+        pass
+    _invalidate_custom_units_cache()
+    try:
+        setattr(owner, attr, value)
+        return True
+    except TypeError:
+        setattr(owner, attr, 'NONE')
+        return False
+
+
 def _active_item_unit_choice(ed):
     """Unit-picker enum choice governing this item's unit of measure — the
     same one already used for CostValue.UnitBasis in the active cost value
@@ -519,7 +544,7 @@ def _load_quantities(context, cost_item=None):
         # (import, takeoff, a previous file) — trust what's actually stored
         # over whatever the price panel currently shows. Legacy quantities
         # with no .Unit reset the picker to NONE rather than guess.
-        ed.cost_quantities_unit = _unit_enum_value_for(getattr(quantities[0], "Unit", None))
+        _set_unit_enum(ed, "cost_quantities_unit", _unit_enum_value_for(getattr(quantities[0], "Unit", None)))
         ed.cost_quantities_unit_custom = ""
     else:
         # No quantities yet — prefill from the item's price unit as a
@@ -591,7 +616,7 @@ def _load_cost_item(context, item_id=None):
         if len(cost_values) == 1 and (getattr(cost_values[0], "Components", None) or []):
             summary_cv = cost_values[0]
             _, unit_entity = _read_unit_basis_entity(summary_cv)
-            ed.rate_analysis_unit = _unit_enum_value_for(unit_entity)
+            _set_unit_enum(ed, "rate_analysis_unit", _unit_enum_value_for(unit_entity))
             cost_values = list(summary_cv.Components or [])
 
         # Components written after the markup block already include safety costs,
@@ -616,7 +641,7 @@ def _load_cost_item(context, item_id=None):
                 qty, unit_entity = _read_unit_basis_entity(cv)
                 if qty is not None:
                     comp.qty = qty
-                    comp.unit = _unit_enum_value_for(unit_entity)
+                    _set_unit_enum(comp, "unit", _unit_enum_value_for(unit_entity))
                     comp.unit_price = round(line_total / qty, 6) if qty else line_total
                 else:
                     comp.unit_price = line_total
@@ -693,7 +718,7 @@ def _load_cost_item(context, item_id=None):
                     pass
 
         if seen_units:
-            ed.cost_value_fixed_unit = seen_units[0]
+            _set_unit_enum(ed, "cost_value_fixed_unit", seen_units[0])
             ed.cost_value_fixed_unit_mixed = len(seen_units) > 1
 
     _load_quantities(context, cost_item)
