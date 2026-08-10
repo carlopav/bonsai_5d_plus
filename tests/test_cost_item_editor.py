@@ -7,7 +7,7 @@ CostValues carry *different* units of measure (possible on files not
 produced by this addon's own Fixed editor, which always writes one
 shared unit), the loader used to silently pick the first unit found and
 discard the rest with no indication to the user. Fixed by tracking all
-distinct units seen and setting wm.cost_value_fixed_unit_mixed when
+distinct units seen and setting ed.cost_value_fixed_unit_mixed when
 there's more than one."""
 
 import types
@@ -96,10 +96,12 @@ class _Collection(list):
         del self[:]
 
 
-def _make_wm():
+def _make_editor_state():
+    """Stand-in for Scene.bonsai5d_cost_editor, the CostItemEditorProps group."""
     return types.SimpleNamespace(
         rate_analysis_components=_Collection(),
         rate_analysis_active_index=0,
+        rate_analysis_safety_pct=0.0,
         rate_analysis_overhead_pct=0.0,
         rate_analysis_profit_pct=0.0,
         rate_analysis_rounding=0.0,
@@ -141,10 +143,10 @@ def _load(item, monkeypatch):
     monkeypatch.setattr(op, "_read_cost_item_info", lambda ctx: None)
     monkeypatch.setattr(op, "_load_quantities", lambda ctx, item: None)
 
-    wm = _make_wm()
-    context = types.SimpleNamespace(window_manager=wm)
+    ed = _make_editor_state()
+    context = types.SimpleNamespace(scene=types.SimpleNamespace(bonsai5d_cost_editor=ed))
     found = op._load_cost_item(context, item_id=item.id())
-    return found, wm
+    return found, ed
 
 
 UNIT_MQ = _MockUnit(501, unit_type="AREAUNIT", name="SQUARE_METRE")
@@ -156,17 +158,17 @@ def test_fixed_mode_loads_all_rows_with_consistent_unit(monkeypatch):
         _MockCostValue(None, 50.0, unit=UNIT_MQ),
         _MockCostValue("Labor", 20.0, unit=UNIT_MQ),
     ])
-    found, wm = _load(item, monkeypatch)
+    found, ed = _load(item, monkeypatch)
 
     assert found is True
-    assert wm.cost_value_mode == 'FIXED'
-    assert len(wm.cost_value_fixed_components) == 2
-    assert wm.cost_value_fixed_components[0].category == 'NONE'
-    assert wm.cost_value_fixed_components[0].unit_price == 50.0
-    assert wm.cost_value_fixed_components[1].category == 'LABOR'
-    assert wm.cost_value_fixed_components[1].unit_price == 20.0
-    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
-    assert wm.cost_value_fixed_unit_mixed is False
+    assert ed.cost_value_mode == 'FIXED'
+    assert len(ed.cost_value_fixed_components) == 2
+    assert ed.cost_value_fixed_components[0].category == 'NONE'
+    assert ed.cost_value_fixed_components[0].unit_price == 50.0
+    assert ed.cost_value_fixed_components[1].category == 'LABOR'
+    assert ed.cost_value_fixed_components[1].unit_price == 20.0
+    assert ed.cost_value_fixed_unit == str(UNIT_MQ.id())
+    assert ed.cost_value_fixed_unit_mixed is False
 
 
 def test_fixed_mode_flags_mixed_units_instead_of_silently_dropping_one(monkeypatch):
@@ -174,25 +176,25 @@ def test_fixed_mode_flags_mixed_units_instead_of_silently_dropping_one(monkeypat
         _MockCostValue(None, 50.0, unit=UNIT_MQ),
         _MockCostValue("Labor", 20.0, unit=UNIT_H),  # different unit — used to be silently lost
     ])
-    found, wm = _load(item, monkeypatch)
+    found, ed = _load(item, monkeypatch)
 
     assert found is True
     # Both rows are still loaded (the bug was about the unit, not the rows/values).
-    assert len(wm.cost_value_fixed_components) == 2
-    assert wm.cost_value_fixed_components[0].unit_price == 50.0
-    assert wm.cost_value_fixed_components[1].unit_price == 20.0
+    assert len(ed.cost_value_fixed_components) == 2
+    assert ed.cost_value_fixed_components[0].unit_price == 50.0
+    assert ed.cost_value_fixed_components[1].unit_price == 20.0
     # The first unit encountered still wins as the shared display unit...
-    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
+    assert ed.cost_value_fixed_unit == str(UNIT_MQ.id())
     # ...but the mismatch is now flagged instead of silently swallowed.
-    assert wm.cost_value_fixed_unit_mixed is True
+    assert ed.cost_value_fixed_unit_mixed is True
 
 
 def test_fixed_mode_single_unit_is_not_flagged_as_mixed(monkeypatch):
     item = _MockCostItem(3, [_MockCostValue(None, 50.0, unit=UNIT_MQ)])
-    _, wm = _load(item, monkeypatch)
+    _, ed = _load(item, monkeypatch)
 
-    assert wm.cost_value_fixed_unit_mixed is False
-    assert wm.cost_value_fixed_unit == str(UNIT_MQ.id())
+    assert ed.cost_value_fixed_unit_mixed is False
+    assert ed.cost_value_fixed_unit == str(UNIT_MQ.id())
 
 
 # ---------------------------------------------------------------------------
@@ -203,22 +205,22 @@ def test_fixed_mode_single_unit_is_not_flagged_as_mixed(monkeypatch):
 
 
 def test_active_item_unit_choice_uses_fixed_unit_in_fixed_mode():
-    wm = types.SimpleNamespace(
+    ed = types.SimpleNamespace(
         cost_value_mode='FIXED',
         cost_value_fixed_unit='501',
         cost_value_fixed_unit_custom="",
         rate_analysis_unit='NONE',
         rate_analysis_unit_custom="",
     )
-    assert op._active_item_unit_choice(wm) == ('501', "")
+    assert op._active_item_unit_choice(ed) == ('501', "")
 
 
 def test_active_item_unit_choice_uses_rate_analysis_unit_otherwise():
-    wm = types.SimpleNamespace(
+    ed = types.SimpleNamespace(
         cost_value_mode='RATE_ANALYSIS',
         cost_value_fixed_unit='NONE',
         cost_value_fixed_unit_custom="",
         rate_analysis_unit='USERDEFINED',
         rate_analysis_unit_custom="cad",
     )
-    assert op._active_item_unit_choice(wm) == ('USERDEFINED', "cad")
+    assert op._active_item_unit_choice(ed) == ('USERDEFINED', "cad")
