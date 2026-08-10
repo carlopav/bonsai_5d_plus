@@ -73,7 +73,7 @@ class EditTenderPricesOperator(*_IfcOperatorBase):
         schedule = file.by_id(int(context.scene.tender_active_schedule))
         self._schedule_name = schedule.Name or f"#{schedule.id()}"
 
-        col = context.scene.tender_price_items
+        col = context.window_manager.tender_price_items
         col.clear()
         for item in _iter_leaves(schedule):
             unit, qty = _get_quantity(item)
@@ -89,7 +89,7 @@ class EditTenderPricesOperator(*_IfcOperatorBase):
 
     def draw(self, context):
         layout = self.layout
-        col = context.scene.tender_price_items
+        col = context.window_manager.tender_price_items
         n = len(col)
 
         layout.label(text=f"Offered prices: {self._schedule_name}", icon="GREASEPENCIL")
@@ -104,8 +104,8 @@ class EditTenderPricesOperator(*_IfcOperatorBase):
 
         layout.template_list(
             "TENDER_UL_PriceItems", "",
-            context.scene, "tender_price_items",
-            context.scene, "tender_price_index",
+            context.window_manager, "tender_price_items",
+            context.window_manager, "tender_price_index",
             rows=min(n, 22),
         )
 
@@ -119,7 +119,7 @@ class EditTenderPricesOperator(*_IfcOperatorBase):
 
         file = _get_ifc()
         count = 0
-        for entry in context.scene.tender_price_items:
+        for entry in context.window_manager.tender_price_items:
             try:
                 item = file.by_id(entry.ifc_id)
             except Exception:

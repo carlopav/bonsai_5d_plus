@@ -50,8 +50,17 @@ def register():
         name="Tender",
         items=_tender_items,
     )
-    bpy.types.Scene.tender_price_items = bpy.props.CollectionProperty(type=TenderPriceItem)
-    bpy.types.Scene.tender_price_index = bpy.props.IntProperty(default=0)
+    # Draft rows of the "Enter Offered Prices" dialog. These live on the
+    # WindowManager, not on Scene, on purpose: Scene is an ID in Main, so every
+    # price confirmed in the dialog would push a memfile undo step serializing
+    # the whole Scene (measured: 145 ms with a 50k-row rate list loaded, more on
+    # a real project) — the dialog would freeze on each typed value. The
+    # WindowManager is excluded from undo, so editing these costs nothing.
+    # The rows are the transient-state exception to "undoable state goes on
+    # Scene": they are rebuilt from the IFC on every dialog open and consumed by
+    # Apply, whose IFC writes are undoable through tool.Ifc.Operator.
+    bpy.types.WindowManager.tender_price_items = bpy.props.CollectionProperty(type=TenderPriceItem)
+    bpy.types.WindowManager.tender_price_index = bpy.props.IntProperty(default=0)
 
 
 def unregister():
@@ -61,5 +70,5 @@ def unregister():
     del bpy.types.Scene.tender_source_boq
     del bpy.types.Scene.tender_company_name
     del bpy.types.Scene.tender_active_schedule
-    del bpy.types.Scene.tender_price_items
-    del bpy.types.Scene.tender_price_index
+    del bpy.types.WindowManager.tender_price_items
+    del bpy.types.WindowManager.tender_price_index

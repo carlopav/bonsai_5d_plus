@@ -9,7 +9,7 @@ from .operator import classes as _op_classes
 from .ui import classes as _ui_classes
 from . import prop
 
-# TenderPriceItem must be registered before Scene.tender_price_items CollectionProperty
+# TenderPriceItem must be registered before the tender_price_items CollectionProperty
 classes = _prop_classes + _op_classes + _ui_classes
 class_register, class_unregister = bpy.utils.register_classes_factory(classes)
 
